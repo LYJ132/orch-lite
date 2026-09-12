@@ -146,7 +146,7 @@ Before dispatching, output a **decomposition list** — each work package with i
 | Real dependency (data or file-scope overlap) | serial; the dependent package waits |
 | >3 heterogeneous parallel packages | user approval (N11); homogeneous needs none |
 
-Parallelism is the default for independent work; serial is justified only by a real dependency.
+Parallelism is the default for independent work; serial is justified only by a NAMED dependency or a shared-file constraint — an awaiting-user-review gate is not a dependency (implement on the branch; the integration merge is the review point).
 
 ### 8.2 Feature-reuse protocol
 1. **Reuse check**: `index show --feature-id <fid>` — feature exists → propose reusing `feature/<fid>`; new branch only for a genuinely new feature.
