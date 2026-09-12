@@ -37,17 +37,9 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 ## Mental Model
 
-```
-main ──dispatch──▶ child (write area = working tree checked out on
-  │                    feature/<feature_id> if no concurrency, else
-  │                    .worktrees/<task_id>/; commits as <task_id>)
-  │                    │
-  │                    ▼
-  │              feature/<feature_id>  (long-lived branch)
-  │                    │
-  └──merge──▶ main  (integration, main-agent only)
-  index.json = { tasks: { task_id → role/status/products } }
-```
+- Main dispatches a child; the child commits as `<task_id>` in its write area — the primary working tree checked out on its `feature/<feature_id>` branch (solo) or `.worktrees/<task_id>/` (concurrency).
+- One long-lived `feature/<feature_id>` branch per feature; integration is the main agent merging into `main` (never a child).
+- `multi-agent/index.json` tracks tasks: `task_id → role/status/products`.
 
 ---
 
