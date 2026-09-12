@@ -1,6 +1,6 @@
 # Protocol (collaboration · dispatch · parallel/reuse · memory rules)
 
-> How agents talk, how tasks are dispatched (fenced-JSON mandate, standard flow), the parallel-decomposition/reuse contract, and the experience/contract record-time rules. Isolation is by construction (worktrees); there are no boundary claim/release steps.
+> How agents talk, how tasks are dispatched (fenced-JSON mandate, standard flow), the parallel-decomposition/reuse contract, and the experience/contract record-time rules. Isolation is by construction (worktrees).
 
 ---
 
@@ -12,6 +12,8 @@
 
 ## 2. Message Types
 
+Resource occupancy is enforced without messages: worktree isolation + the CLI-internal memory flock — no boundary claim/release mechanism exists.
+
 ### 2.1 Integration conflict (main → user)
 Concurrent same-file edits are prevented by construction, so there is no child-to-child SCOPE_VIOLATION anymore. The only conflict surface is integration: `worktree merge --feature-id` pre-check reports conflicting files and asks the user (abort by default, or `--no-commit` for manual resolution).
 
@@ -19,10 +21,7 @@ Concurrent same-file edits are prevented by construction, so there is no child-t
 CONFLICT from=main feature_id=login-api-fix files=["src/auth/login.py"] stage=pre-merge decision_needed=user
 ```
 
-### 2.2 Resource occupancy
-Enforced **without messages**: worktree isolation (one writable worktree per feature branch). Shared-memory writes are serialized by a CLI-internal flock on `multi-agent/memory/.lock`. There is no boundary claim/release CLI.
-
-### 2.3 HANDOFF_PLAN (main → child A + child B, notified synchronously at dispatch)
+### 2.2 HANDOFF_PLAN (main → child A + child B, notified synchronously at dispatch)
 ```
 HANDOFF_PLAN from=main to=impl-20260911-01,test-20260911-02 artifact="After the login API fix, the test task runs regression tests"
 ```
@@ -117,7 +116,7 @@ report to the main session directly (fallback: temp communication doc on failure
 the report lists product paths + the commit so the main agent records them under `index update` products
 ```
 
-**Never commit to main / the primary working tree's main branch** — reserved for the main agent's integration merges. There are no boundary check/release steps (retired). **Commit-before-report is mandatory**: when a worktree exists, it is removed at T2, so anything uncommitted is destroyed.
+**Never commit to main / the primary working tree's main branch** — reserved for the main agent's integration merges. **Commit-before-report is mandatory**: when a worktree exists, it is removed at T2, so anything uncommitted is destroyed.
 
 ---
 
@@ -129,7 +128,7 @@ Adds optional fields on top of the 4 required: `parent_task_id` / `worker_index`
 {"task_id": "test-worker-01", "role": "test", "objective": "Run test suite tests/unit/test_auth.py", "acceptance_criteria": ["all tests pass", "coverage ≥ 80%"], "parent_task_id": "test-20260911-01", "worker_index": 0, "shard_spec": ["tests/unit/test_auth.py"]}
 ```
 
-> Workers share the parent's worktree (N19): no separate worktrees, disjoint shards, never commit — the parent is sole committer (collects into `artifacts/{task_id}/worker-{i}/`). Read-only tasks (review, test runs) may use a detached checkout. No boundary ops; no leftovers after the session is auto-ended.
+> Workers share the parent's worktree (N19): no separate worktrees, disjoint shards, never commit — the parent is sole committer (collects into `artifacts/{task_id}/worker-{i}/`). Read-only tasks (review, test runs) may use a detached checkout. No leftovers after the session is auto-ended.
 >
 > **Platform constraint**: worker spawning is conditional on platform support for nested agent spawning. On platforms where the Agent tool is unavailable inside subagents (current platform: `Tool not found: Agent`), the **main agent dispatches homogeneous shards directly (flat parallelism)**; command-level concurrency (`pytest -n auto`, `xargs -P`) is preferred over extra agents.
 
