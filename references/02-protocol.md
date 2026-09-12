@@ -41,7 +41,7 @@ HANDOFF_PLAN from=main to=impl-20260911-01,test-20260911-02 artifact="After the 
 | Main→worktrees | CLI | `worktree create` (T1) / `worktree remove` (T2) / `worktree merge --feature-id` (integration) |
 | Child→main (comm failure) | temp doc | fallback path |
 
-**Forbidden**: child→child task dispatch (must go through main); child committing to main; worker talking directly to main (must go through parent).
+**Forbidden**: child→child task dispatch (must go through main); child committing to main.
 
 ---
 
@@ -120,17 +120,7 @@ the report lists product paths + the commit so the main agent records them under
 
 ---
 
-## 7. Worker Dispatch (parent → worker)
-
-Adds optional fields on top of the 4 required: `parent_task_id` / `worker_index` / `shard_spec`. Same fenced-JSON mandate (§5.1).
-
-```json
-{"task_id": "test-worker-01", "role": "test", "objective": "Run test suite tests/unit/test_auth.py", "acceptance_criteria": ["all tests pass", "coverage ≥ 80%"], "parent_task_id": "test-20260911-01", "worker_index": 0, "shard_spec": ["tests/unit/test_auth.py"]}
-```
-
-> Workers share the parent's worktree (N19): no separate worktrees, disjoint shards, never commit — the parent is sole committer (collects into `artifacts/{task_id}/worker-{i}/`). Read-only tasks (review, test runs) may use a detached checkout. No leftovers after the session is auto-ended.
->
-> **Platform constraint**: worker spawning is conditional on platform support for nested agent spawning. On platforms where the Agent tool is unavailable inside subagents (current platform: `Tool not found: Agent`), the **main agent dispatches homogeneous shards directly (flat parallelism)**; command-level concurrency (`pytest -n auto`, `xargs -P`) is preferred over extra agents.
+No worker dispatch on this platform: subagents lack the Agent tool (probe 2026-09-11, 01-judgment 4.2).
 
 ---
 

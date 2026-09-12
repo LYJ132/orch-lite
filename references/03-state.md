@@ -67,7 +67,7 @@ project root/                        ← primary working tree: main agent only (
 | Main-tree protection | primary tree = main only (integration merges); children never commit to main |
 | Invariant | at most ONE writable worktree per feature branch (git-enforced; a second create fails with `feature busy`) |
 
-**Two create openings**: ① first task of a feature — `feature/<fid>` does not exist yet, created from `--base` (default `main`); ② later task of the same feature — branch exists, new worktree attaches, continuing the feature. Same-feature concurrency beyond that is handled per N19: workers share the parent's worktree (disjoint shards, never commit), and read-only tasks (review, test runs) use a detached checkout.
+**Two create openings**: ① first task of a feature — `feature/<fid>` does not exist yet, created from `--base` (default `main`); ② later task of the same feature — branch exists, new worktree attaches, continuing the feature. Same-feature concurrency beyond that follows the lazy concurrency gate (01-judgment §1.11).
 
 ### 3.2 Merge & conflict flow (N3, rewritten)
 ```

@@ -116,7 +116,7 @@ Every dispatch prompt has exactly four parts, in order:
 1. `index show --feature-id <fid>` → existing product? → tell it to reference
 2. Else create per N11 and dispatch
 
-**Child/worker side**: after receiving a dispatch, follow the standard flow in [02-protocol.md §6](references/02-protocol.md).
+**Child side**: after receiving a dispatch, follow the standard flow in [02-protocol.md §6](references/02-protocol.md).
 
 ---
 
