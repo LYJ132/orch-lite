@@ -38,7 +38,7 @@ HANDOFF_PLAN from=main to=impl-20260911-01,test-20260911-02 artifact="After the 
 | Child→main (report/help) | direct | structured text |
 | Child→child (product handoff) | index doc | A writes, B polls & reads |
 | Child→child (info query) | point-to-point | read-only only |
-| Child→its worktree | git | work only in `.worktrees/<task_id>/`, commit as `<task_id>`, never on main |
+| Child→its write area | git | work only in the workspace named for you (no other task running → the working tree on your `feature/<feature_id>` branch, created before the first write; a task running → `.worktrees/<task_id>/`); commit as `<task_id>`, never on main |
 | Main→worktrees | CLI | `worktree create` (T1) / `worktree remove` (T2) / `worktree merge --feature-id` (integration) |
 | Child→main (comm failure) | temp doc | fallback path |
 
@@ -86,9 +86,9 @@ The dispatch prompt MUST embed the package as a fenced JSON block:
 
 This section OWNS the process boilerplate — the main agent never re-pastes it. **Fresh executors**: if you were not given these steps, follow this flow:
 
-> **Dispatch prompt shape (MUST template — mirrored from SKILL.md "Dispatch Package")**: 1 identity line (`<task_id> (role: <role>). You are a dispatched child executor.`) + a six-rule MUST block — (1) do all work with your own tools, never dispatch/derive further agents; (2) work only in the named workspace per concurrency state (no other task running → working tree; a task running → `.worktrees/<task_id>/`), never outside it; (3) commit incrementally, authored as `<task_id>`, always before reporting; (4) check `multi-agent/memory/shared.json` + the index before re-deriving anything non-obvious; (5) follow every entry in memory `contracts[]`; (6) report `TASK_COMPLETED` + summary + commit hash, or a structured failure report — never go silent — + the fenced-JSON package (§5.1) + at most 3 context-pointer lines (file-unreachable facts only; secrets read-never-print).
+> **Dispatch prompt shape (MUST template — mirrored from SKILL.md "Dispatch Package")**: 1 identity line (`<task_id> (role: <role>). You are a dispatched child executor.`) + a six-rule MUST block — (1) do all work with your own tools, never dispatch/derive further agents; (2) work only in the named workspace per concurrency state (no other task running → the working tree on a `feature/<feature_id>` branch you create first; a task running → `.worktrees/<task_id>/`), never commit on main (`main` only receives integration merges by the main agent), never work outside it; (3) commit incrementally, authored as `<task_id>`, always before reporting; (4) check `multi-agent/memory/shared.json` + the index before re-deriving anything non-obvious; (5) follow every entry in memory `contracts[]`; (6) report `TASK_COMPLETED` + summary + commit hash, or a structured failure report — never go silent — + the fenced-JSON package (§5.1) + at most 3 context-pointer lines (file-unreachable facts only; secrets read-never-print).
 
-> **Worktree is optional (lazy isolation, §1.11)**: the dispatch JSON carries a `worktree` context line ONLY when the main agent found concurrency at dispatch; without it, write directly in the working tree.
+> **Worktree is optional (lazy isolation, §1.11)**: the dispatch JSON carries a `worktree` context line ONLY when the main agent found concurrency at dispatch; without it, write in the working tree — on your `feature/<feature_id>` branch, created and checked out before the first write, never on `main`.
 
 ```
 Receive dispatch package

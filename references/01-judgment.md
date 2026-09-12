@@ -39,12 +39,12 @@ The index provides only: task status + usable products. It is not for real-time 
 - **When a worktree is used**, it gives isolation by construction: `.worktrees/<task_id>/`, created at T1, removed at T2; one long-lived branch per feature (`feature/<feature_id>`)
 - Whether a worktree is used at all is decided **lazily, per §1.11** (only when another child is still `running` at dispatch)
 - One long-lived branch per feature: `feature/<feature_id>`; merge is integration, not closure; never auto-deleted
-- Concurrent same-file edits cannot collide by construction: each executor writes only in its own worktree, never on main
+- Concurrent same-file edits cannot collide by construction: each executor writes only in its own write area (worktree, or — when solo — the working tree checked out on its feature branch), never on main
 - The old two-time-point boundary writes are retired.
 
 ### 1.11 Isolation Is Gated on Observed Concurrency (Lazy)
 Isolate only when concurrency is real. At dispatch, the main agent reads the index's live-task set (any other child still `running`?):
-- **None running** → single task, no concurrency → the child writes directly in the main working tree (NO worktree = zero isolation premium).
+- **None running** → single task, no concurrency → the child writes in the primary working tree on its `feature/<feature_id>` branch, created and checked out before its first write — NO worktree (zero isolation premium), but still never on `main`.
 - **One+ running** → concurrency is real → create a worktree for the newcomer so its writes cannot collide.
 This is a "blunt" gate: it cannot see *which file* another child is writing, so concurrent-but-disjoint tasks are still worktreed. That over-isolation is one cheap `git worktree add`; the alternative (a per-file occupancy table that lets us know exactly who holds which file) is precisely the `files`/`git` occupancy tracking we retired — not worth the lifecycle cost. Zero new mechanism, `boundaries.json` stays retired.
 
