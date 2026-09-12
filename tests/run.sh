@@ -23,6 +23,11 @@ set -u
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SKILL_DIR" || exit 1
 
+# SKILL.md lives at skills/orch-lite/SKILL.md (plugin layout, Phase 1); the
+# hooks resolve it via _SKILL_MD_CANDIDATES. Temp-copy builders keep the
+# deployed flat shape (SKILL.md at the copy root).
+SKILL_MD="skills/orch-lite/SKILL.md"
+
 TMP_DIRS=()
 cleanup() { [ ${#TMP_DIRS[@]} -gt 0 ] && rm -rf "${TMP_DIRS[@]}"; }
 trap cleanup EXIT
@@ -52,7 +57,7 @@ fresh_copy() {
   d="$(mktemp -d)" || return 1
   TMP_DIRS+=("$d")
   mkdir -p "$d/skill" || return 1
-  cp -r "$SKILL_DIR/hooks" "$SKILL_DIR/scripts" "$SKILL_DIR/SKILL.md" "$d/skill/" || return 1
+  cp -r "$SKILL_DIR/hooks" "$SKILL_DIR/scripts" "$SKILL_DIR/$SKILL_MD" "$d/skill/" || return 1
   printf '%s\n' "$d/skill"
 }
 
@@ -121,9 +126,9 @@ fenced_prompt() {  # $1=fenced payload content
 # --- frontmatter ---
 
 case_fm_parse() {
-  python3 - <<'PY'
-import yaml
-src = open("SKILL.md").read()
+  python3 - "$SKILL_MD" <<'PY'
+import sys, yaml
+src = open(sys.argv[1]).read()
 parts = src.split("---", 2)
 if len(parts) < 3:
     raise SystemExit("no '---' frontmatter block")
@@ -315,7 +320,7 @@ case_3_5() {
   # Runs in the repo — session-init is idempotent/read-only there by design.
   local json
   json="$(printf '{}' | python3 hooks/session-init.py)" || return 1
-  python3 - "$json" <<'PY'
+  python3 - "$json" "$SKILL_MD" <<'PY'
 import hashlib, json, sys
 
 ctx = json.loads(sys.argv[1])["additionalContext"]
@@ -336,7 +341,7 @@ def skill_slice(lines, prefix):
         section.append(line)
     return "\n".join(section).strip()
 
-lines = open("SKILL.md").read().splitlines()
+lines = open(sys.argv[2]).read().splitlines()
 for prefix, label in (
     ("## 5 Invariants (memorize)", "5 Invariants (memorize)"),
     ("## Request Routing", "Request Routing"),
