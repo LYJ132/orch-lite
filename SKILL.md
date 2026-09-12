@@ -124,6 +124,8 @@ Every dispatch prompt has exactly four parts, in order:
 
 `index` / `worktree` / `memory` + top-level `init` / `doctor` (no `boundary` group; shared-memory writes are flocked internally by the CLI).
 
+> Requirements: **Python >= 3.9** for the CLI and both hooks (older interpreters print a one-line stderr message; hooks fail-open, the CLI exits non-zero). uv users may run via `uv run --python 3.12 <script>` — docs only, no dependency.
+
 | Command | Purpose / User |
 |---|---|
 | `index create --task-id --role [--feature-id] [--objective] [--criteria …]` | Main, T1: flat entry, status=assigned |
@@ -163,7 +165,7 @@ Full params in [03-state.md](references/03-state.md).
 | Hook | Event | Purpose |
 |---|---|---|
 | `session-init.py` | `SessionStart` | idempotent `init` + inject `index list` + probe `doctor` (Health) + inject the "Request Routing" and "Dispatch Package (MUST template)" sections verbatim from SKILL.md |
-| `dispatch-validate.py` | `PreToolUse` on `Agent\|Task` | enforces N15 by validating the fenced-JSON dispatch block (4 required fields; `feature_id` branch-safe); no block → deny, invalid → deny |
+| `dispatch-validate.py` | `PreToolUse` on `Agent\|Task` | enforces N15 by validating the fenced-JSON dispatch block (4 required fields; `feature_id` branch-safe) via the ZCode exit-code contract: pass → silent exit 0, deny → reason on stderr + exit 2, internal error → fail-open exit 0 (never JSON on stdout) |
 
 Both idempotent, degrade gracefully, never block.
 
