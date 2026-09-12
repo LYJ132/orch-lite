@@ -363,16 +363,41 @@ assert "[orch-lite]" in ctx
 PY
 }
 
-# --- doctor in the repo: always exit 0, even while printing findings ---
+# --- doctor check (3) in scratch repos: direct-on-main flagged, merged clean ---
 
 case_doctor() {
-  # Current behavior (rule-schism pending): task_id-authored commits on main
-  # surface as main-violation findings — assert exit 0 AND findings printed,
-  # not the future "all clear" shape.
-  local out
-  out="$(python3 scripts/multi-agent doctor)" || return 1
+  # Branch discipline (post-schism rule): a task_id-authored commit made
+  # DIRECTLY on main surfaces as main-violation; the same commit reaching main
+  # through the main agent's --no-ff merge (second parent) must NOT — the scan
+  # is first-parent. doctor always exits 0. Sandboxes are mktemp -d, fully
+  # independent of this repo's history and multi-agent/ state.
+  local dir out
+
+  # (a) direct task commit on main -> violation
+  dir="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$dir")
+  git -C "$dir" init -q -b main || return 1
+  git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
+  mkdir -p "$dir/multi-agent" && printf '{"tasks": {}}' > "$dir/multi-agent/index.json" || return 1
+  git -C "$dir" -c user.name=ops-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work committed on main" || return 1
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
-  grep -q "main-violation:" <<< "$out" || { echo "expected main-violation findings (current behavior)"; return 1; }
+  grep -q "main-violation: ops-20260912-99" <<< "$out" || { echo "(a) expected main-violation for a direct commit on main"; return 1; }
+
+  # (b) task commit on a feature branch, merged into main -> no violation
+  dir="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$dir")
+  git -C "$dir" init -q -b main || return 1
+  git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
+  mkdir -p "$dir/multi-agent" && printf '{"tasks": {}}' > "$dir/multi-agent/index.json" || return 1
+  git -C "$dir" checkout -q -b feature/demo || return 1
+  git -C "$dir" -c user.name=impl-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work on feature branch" || return 1
+  git -C "$dir" checkout -q main || return 1
+  git -C "$dir" -c user.name=orchestrator-merge -c user.email=orchestrator@local merge -q --no-ff feature/demo -m "Merge feature/demo into main" || return 1
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
+  printf '%s\n' "$out"
+  grep -q "main-violation" <<< "$out" && { echo "(b) merge-integrated task commit must NOT surface as main-violation"; return 1; }
+  grep -q "doctor: all clear" <<< "$out" || { echo "(b) expected 'doctor: all clear' in the merged-clean repo"; return 1; }
 }
 
 # --- run everything ---
@@ -400,7 +425,7 @@ run_case "audit  session-init garbage stdin -> exit 0"    case_si_garbage_stdin
 run_case "audit  session-init empty stdin -> exit 0"      case_si_empty_stdin
 run_case "audit  session-init missing CLI -> exit 0"      case_si_audit_no_cli
 run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skillmd
-run_case "doctor repo doctor exits 0 with findings"       case_doctor
+run_case "doctor main-violation: direct flagged, merged clean" case_doctor
 
 printf '%s\n' "${SUMMARY[@]}"
 echo
