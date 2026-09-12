@@ -8,13 +8,20 @@ own location (`__file__`) — zero hardcoded absolute paths. On session start:
 2. Idempotently run `<skill>/scripts/multi-agent init` (the CLI only creates
    files that don't exist; it never overwrites).
 3. Run `multi-agent index list` and inject the agent index.
-4. Probe `multi-agent doctor` — captured but tolerated: the subcommand does
-   not exist yet (a future task adds it). A non-zero exit or argparse-style
-   "invalid choice"/"unrecognized" output means "absent" and the Health
-   section is skipped silently; a successful non-empty run becomes "Health".
+4. Probe `multi-agent doctor` and inject its output as "Health". A non-zero
+   exit with argparse-style "invalid choice"/"unrecognized" output means the
+   subcommand is absent and the section is skipped silently; an empty output
+   is likewise skipped.
 5. Extract the "## Request Routing" and "## Dispatch Package (MUST template)"
    sections verbatim from SKILL.md (single source of truth; the hook holds no
    second copy of the contracts) and inject each as its own labeled part.
+
+Fail-soft rendering: a CLI-derived section whose CLI call fails (non-zero
+exit, a "bootstrap skipped: ..." line, or traceback-shaped output — e.g. the
+session cwd is unwritable) collapses to ONE human line,
+'--- <Section> (skipped: <reason>) ---'. The words "Traceback", 'File "' and
+"PermissionError" never survive into the payload, so an unwritable cwd can no
+longer poison the session context with a raw traceback.
 
 Graceful degradation: any error → best-effort output; the hook always exits 0
 and prints exactly one {"additionalContext": ...} JSON — it never crashes the
@@ -40,6 +47,7 @@ if sys.version_info < (3, 9):
     sys.exit(0)
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import List, Tuple
@@ -71,6 +79,68 @@ MISSING_CONTRACT = "(contract section missing in SKILL.md)"
 # argparse marks a not-yet-existing subcommand with these strings.
 DOCTOR_ABSENT_MARKERS = ("invalid choice", "unrecognized")
 
+# Traceback machinery words that must never reach the payload (an unwritable
+# cwd once injected a raw PermissionError traceback via the CLI's stderr).
+TRACEBACK_MARKERS = ("Traceback", 'File "', "PermissionError")
+# The fail-soft CLI announces a degraded bootstrap with this line prefix.
+BOOTSTRAP_SKIP_PREFIX = "bootstrap skipped: "
+# Final line of a raw Python traceback for an OS error, e.g.
+# "PermissionError: [Errno 13] Permission denied: '/home/x/multi-agent'" --
+# reduced to path + reason, the exception machinery itself is dropped.
+_ERRNO_EXC_RE = re.compile(
+    r"^[A-Za-z_][\w.]*(?:Error|Exception): \[Errno \d+\] (.+): '(.+)'$"
+)
+
+
+def _has_traceback_markers(text: str) -> bool:
+    return any(marker in text for marker in TRACEBACK_MARKERS)
+
+
+def _skip_detail(out: str) -> str:
+    """The reason clause of the CLI's own fail-soft line, or '' when absent."""
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if line.startswith(BOOTSTRAP_SKIP_PREFIX):
+            return line[len(BOOTSTRAP_SKIP_PREFIX):]
+    return ""
+
+
+def _failure_detail(out: str, code: int) -> str:
+    """One human clause from a failed CLI run; traceback text never survives.
+
+    A raw traceback (older CLI, or a crash on stderr) is reduced to its final
+    exception line's path + reason; a human one-liner (e.g. python's "can't
+    open file ...") passes through as-is; anything traceback-shaped or empty
+    becomes a generic clause.
+    """
+    for line in reversed((out or "").splitlines()):
+        m = _ERRNO_EXC_RE.match(line.strip())
+        if m:
+            return "cannot create %s: %s" % (m.group(2), m.group(1))
+    for line in reversed((out or "").splitlines()):
+        line = line.strip()
+        if line and not _has_traceback_markers(line):
+            return line[:160]
+    return "CLI failed (exit %d)" % code
+
+
+def _render_cli(label: str, args: List[str], default_body: str,
+                code: int, out: str) -> str:
+    """Render one CLI-derived section with fail-soft fallback.
+
+    Success → '--- <label> (multi-agent <args>) ---' plus the CLI output.
+    Failure (non-zero exit, a bootstrap-skip line, or traceback-shaped text)
+    → the single human line '--- <label> (skipped: <reason>) ---'.
+    """
+    out = (out or "").strip()
+    skip = _skip_detail(out)
+    if code == 0 and skip == "" and not _has_traceback_markers(out):
+        return "--- %s (multi-agent %s) ---\n%s" % (
+            label, " ".join(args), out or default_body
+        )
+    detail = skip if skip else _failure_detail(out, code)
+    return "--- %s (skipped: %s) ---" % (label, detail)
+
 
 def read_stdin_event() -> dict:
     """Consume the SessionStart event JSON; anything unreadable → {}."""
@@ -98,17 +168,20 @@ def run_cli(args: List[str], timeout: int = 15) -> Tuple[int, str]:
 
 
 def health_section() -> str:
-    """`multi-agent doctor` output, or '' while the subcommand is absent.
+    """`multi-agent doctor` output as the Health section, or '' when there is
+    nothing to report.
 
-    Absence (non-zero exit, empty output, or argparse usage/error text) is
-    skipped silently — doctor is added by a future task.
+    Absence (argparse usage/error text on a non-zero exit) or empty output is
+    skipped silently — doctor may be absent on an older install. A hard
+    failure renders the human '--- Health (skipped: ...) ---' fallback line.
     """
     code, out = run_cli(["doctor"])
-    if code != 0 or not out:
+    out = (out or "").strip()
+    if not out:
         return ""
-    if any(marker in out for marker in DOCTOR_ABSENT_MARKERS):
+    if code != 0 and any(marker in out for marker in DOCTOR_ABSENT_MARKERS):
         return ""
-    return out
+    return _render_cli("Health", ["doctor"], "", code, out)
 
 
 def extract_contract(heading_prefix: str, lines: List[str]) -> str:
@@ -148,17 +221,17 @@ def contract_sections() -> List[Tuple[str, str]]:
 
 def build_context() -> str:
     """Assemble the single additionalContext payload (compact)."""
-    _, init_out = run_cli(["init"])
-    _, index_out = run_cli(["index", "list"])
-    health = health_section()
+    code, init_out = run_cli(["init"])
+    index_code, index_out = run_cli(["index", "list"])
 
     parts = [
         "[orch-lite]",
-        f"--- Bootstrap (multi-agent init) ---\n{init_out or '(no output)'}",
-        f"--- Agent Index (multi-agent index list) ---\n{index_out or '(empty)'}",
+        _render_cli("Bootstrap", ["init"], "(no output)", code, init_out),
+        _render_cli("Agent Index", ["index", "list"], "(empty)", index_code, index_out),
     ]
+    health = health_section()
     if health:
-        parts.append(f"--- Health (multi-agent doctor) ---\n{health}")
+        parts.append(health)
     for label, section in contract_sections():
         parts.append(f"--- {label} (from SKILL.md) ---\n{section}")
     return "\n\n".join(parts)

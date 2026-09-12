@@ -125,11 +125,15 @@ line with exit 0 — the hook never crashes the session.
 | 3.4 | CLI copy predating the doctor subcommand | Health skipped silently (graceful-absence probe), the other sections intact, exit 0 | ✅ |
 | 3.5 | SKILL.md with both contract sections (current shape) | additionalContext contains both "--- Request Routing (from SKILL.md) ---" and "--- Dispatch Package (MUST template) (from SKILL.md) ---", each section byte-identical to the SKILL.md text (verified programmatically: `extract_contract` output vs the slice between headings) | ✅ |
 | 3.6 | SKILL.md without the "## Dispatch Package (MUST template)" section | fallback line for that section only, no crash, exit 0 | ✅ |
+| 3.7 | session cwd unwritable (chmod 555 dir; e.g. a root-owned 755 project) | hook exits 0; Bootstrap + Agent Index render `--- <Section> (skipped: cannot create <path>: Permission denied) ---`; the words `Traceback`, `File "`, `PermissionError` never appear in the payload; contract sections still inject; nothing created in the cwd | ✅ |
+| 3.8 | same unwritable cwd, raw CLI calls | `doctor` → `(doctor: not a repo)`, exit 0; `index list` → one `bootstrap skipped: cannot create ...` line, exit 0; explicit `init` → same line, clean non-zero; no traceback on any channel | ✅ |
 
 > Note (2026-09-12, impl-20260912-04/07): rows 3.1–3.6 are executable —
 > `bash tests/run.sh` covers them (3.5 asserts byte-identity via sha256;
 > 3.1/3.2/3.3/3.6 run in mktemp sandboxes under a `GIT_CEILING_DIRECTORIES`
-> ceiling so a stray repo at a TMPDIR ancestor cannot leak in).
+> ceiling so a stray repo at a TMPDIR ancestor cannot leak in). Rows 3.7/3.8
+> (impl-20260912-10, fail-soft on unwritable cwds) are executable too and use
+> the same ceiling; they are vacuously green when run as root.
 
 The injected contract is byte-identical to the SKILL.md section (verified
 programmatically), so editing SKILL.md is the only way the routing rule

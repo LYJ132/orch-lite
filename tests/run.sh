@@ -392,6 +392,64 @@ assert "[orch-lite]" in ctx
 PY
 }
 
+# --- fail-soft on an unwritable cwd (live SessionStart traceback regression) ---
+# A session opened in an unwritable cwd (root-owned 755, e.g. ~/unmanned-store)
+# once poisoned its own SessionStart context: the CLI's raw PermissionError
+# traceback from ensure_multi_agent_dir reached additionalContext. These cases
+# pin the fix: one human fallback line per affected section, observer exit 0,
+# explicit init clean non-zero, no traceback word on stdout. Vacuously green
+# under root (chmod 555 cannot block root).
+
+unwritable_dir() {  # echo the path of a fresh chmod-555 dir (registered for cleanup)
+  local d
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  chmod 555 "$d" || return 1
+  printf '%s\n' "$d"
+}
+
+case_si_unwritable_cwd() {
+  [ "$(id -u)" -eq 0 ] && return 0
+  local d out rc=0
+  d="$(unwritable_dir)" || return 1
+  out="$(cd "$d" && printf '{}' | python3 "$SKILL_DIR/hooks/session-init.py")" || rc=$?
+  chmod 755 "$d"
+  [ "$rc" -eq 0 ] || { printf 'hook must exit 0 in an unwritable cwd, got %s\n' "$rc"; return 1; }
+  [ -z "$(ls -A "$d")" ] || { printf 'nothing may be created in the unwritable cwd, found: %s\n' "$(ls -A "$d")"; return 1; }
+  python3 - "$out" <<'PY'
+import json, sys
+ctx = json.loads(sys.argv[1])["additionalContext"]
+assert "--- Bootstrap (skipped: cannot create " in ctx, \
+    f"bootstrap fallback header missing; ctx head: {ctx[:200]!r}"
+assert "--- Agent Index (skipped: cannot create " in ctx, "index fallback header missing"
+assert "Permission denied" in ctx, "permission reason missing from the fallback lines"
+for banned in ("Traceback", 'File "', "PermissionError"):
+    assert banned not in ctx, f"traceback word leaked into the payload: {banned!r}"
+assert "Request Routing" in ctx, "contract sections must still inject"
+PY
+}
+
+case_cli_unwritable_cwd() {
+  [ "$(id -u)" -eq 0 ] && return 0
+  local d out rc=0
+  d="$(unwritable_dir)" || return 1
+  # doctor: one human line, exit 0 (the quality bar the others must match)
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)"; rc=$?
+  [ "$rc" -eq 0 ] || { chmod 755 "$d"; printf 'doctor must exit 0, got %s: %s\n' "$rc" "$out"; return 1; }
+  grep -q "(doctor: not a repo)" <<< "$out" || { chmod 755 "$d"; printf 'doctor human line missing: %s\n' "$out"; return 1; }
+  # index list (observer): same one line, exit 0
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index list)"; rc=$?
+  [ "$rc" -eq 0 ] || { chmod 755 "$d"; printf 'index list must exit 0, got %s: %s\n' "$rc" "$out"; return 1; }
+  grep -q "bootstrap skipped: cannot create .*: Permission denied" <<< "$out" || { chmod 755 "$d"; printf 'index list fail-soft line missing: %s\n' "$out"; return 1; }
+  # explicit init: same line, clean non-zero; no traceback on any channel
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" init 2>&1)"; rc=$?
+  chmod 755 "$d"
+  [ "$rc" -ne 0 ] || { printf 'explicit init must exit non-zero, got 0: %s\n' "$out"; return 1; }
+  grep -q "bootstrap skipped: cannot create .*: Permission denied" <<< "$out" || { printf 'init fail-soft line missing: %s\n' "$out"; return 1; }
+  if grep -q "Traceback" <<< "$out"; then printf 'traceback leaked:\n%s\n' "$out"; return 1; fi
+  [ -z "$(ls -A "$d")" ] || { printf 'cwd must stay empty, found: %s\n' "$(ls -A "$d")"; return 1; }
+}
+
 # --- doctor check (3) in scratch repos: direct-on-main flagged, merged clean ---
 
 case_doctor() {
@@ -571,6 +629,8 @@ run_case "audit  session-init garbage stdin -> exit 0"    case_si_garbage_stdin
 run_case "audit  session-init empty stdin -> exit 0"      case_si_empty_stdin
 run_case "audit  session-init missing CLI -> exit 0"      case_si_audit_no_cli
 run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skillmd
+run_case "3.7    session-init unwritable cwd -> fallback, exit 0" case_si_unwritable_cwd
+run_case "3.8    CLI unwritable cwd: doctor/list/init human lines" case_cli_unwritable_cwd
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
 run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate" case_doctor_drift
 run_case "MEM   memory_set traverses list indices, clean errors" case_mem_set_list
