@@ -85,6 +85,26 @@ def ensure_multi_agent_dir():
         MEMORY_FILE.write_text('{"common_knowledge": {}, "experiences": [], "task_patterns": {}, "contracts": []}')
 
 
+def _bootstrap_error_line(exc: OSError) -> str:
+    """ONE human-readable line for a cwd whose multi-agent tree cannot be
+    created/read/written (fail-soft contract: never a traceback on stdout)."""
+    reason = getattr(exc, "strerror", None) or type(exc).__name__
+    path = getattr(exc, "filename", None) or str(MULTI_AGENT_DIR)
+    return f"bootstrap skipped: cannot create {path}: {reason}"
+
+
+def _ensure_tree() -> Optional[str]:
+    """ensure_multi_agent_dir(), fail-soft: None on success, otherwise the one
+    human-readable error line (PermissionError from an unwritable cwd, ...).
+    An unwritable cwd is an environment fact, not a crash: observer commands
+    must degrade like doctor's '(doctor: not a repo)', writers exit cleanly."""
+    try:
+        ensure_multi_agent_dir()
+        return None
+    except OSError as exc:
+        return _bootstrap_error_line(exc)
+
+
 def _run_git(*git_args: str) -> tuple:
     """Run a git command in PROJECT_ROOT. Returns (returncode, combined output). Never raises."""
     try:
@@ -160,10 +180,11 @@ def ensure_git_repo():
 
 
 def load_json(file: Path) -> Dict[str, Any]:
-    """Load a JSON file"""
+    """Load a JSON file. Unreadable (missing, PermissionError, ...) -> {}:
+    readers must never crash on an environment they cannot access."""
     try:
         return json.loads(file.read_text())
-    except (json.JSONDecodeError, FileNotFoundError):
+    except (json.JSONDecodeError, OSError):
         return {}
 
 
@@ -243,9 +264,21 @@ def _load_index() -> Dict[str, Any]:
     return index
 
 
+def _load_index_soft() -> tuple:
+    """_load_index(), fail-soft: (index, None) on success, (None, error line)
+    when PermissionError/OSError escapes the ensure/read/migrate sequence."""
+    try:
+        return _load_index(), None
+    except OSError as exc:
+        return None, _bootstrap_error_line(exc)
+
+
 def index_create(args):
     """T1 assign time point: create a task entry (flat task map, status=assigned)"""
-    index = _load_index()
+    index, err = _load_index_soft()
+    if err:
+        print(err)
+        return 1  # writer: the tree must exist; clean non-zero, same one line
     tasks = index.setdefault("tasks", {})
 
     if args.task_id in tasks:
@@ -273,7 +306,10 @@ def index_create(args):
 
 def index_update(args):
     """T2 status-update time point: update task status/output/products (record completed time when terminal)"""
-    index = _load_index()
+    index, err = _load_index_soft()
+    if err:
+        print(err)
+        return 1  # writer: the tree must exist; clean non-zero, same one line
     task = index.get("tasks", {}).get(args.task_id)
     if not task:
         print(f"Error: task {args.task_id} does not exist")
@@ -295,7 +331,12 @@ def index_update(args):
 
 def index_list(args):
     """Flat task list: task_id | role | feature_id | status"""
-    index = _load_index()
+    index, err = _load_index_soft()
+    if err:
+        # Observer: an unwritable cwd is reported, not crashed on (same bar as
+        # doctor's '(doctor: not a repo)') -- one human line, exit 0.
+        print(err)
+        return 0
     tasks = index.get("tasks", {})
     if not tasks:
         print("Index is empty")
@@ -310,7 +351,10 @@ def index_list(args):
 
 def index_show(args):
     """Show one task's detail (--task-id) or all tasks of a feature (--feature-id, the reuse check)"""
-    index = _load_index()
+    index, err = _load_index_soft()
+    if err:
+        print(err)
+        return 0  # observer: fail-soft, one human line
     tasks = index.get("tasks", {})
 
     if args.task_id:
@@ -375,7 +419,10 @@ def _memory_lock():
 
 def memory_get(args):
     """Read shared memory: --key uses dotted path (e.g. common_knowledge.tech_stack); default outputs the whole file"""
-    ensure_multi_agent_dir()
+    err = _ensure_tree()
+    if err:
+        print(err)
+        return 0  # observer: fail-soft, one human line
     data = load_json(MEMORY_FILE)
     if not args.key:
         print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -410,7 +457,10 @@ def memory_set(args):
     out-of-range index, or descending into a scalar) is a clean usage error:
     one error line + exit 1, never a traceback.
     """
-    ensure_multi_agent_dir()
+    err = _ensure_tree()
+    if err:
+        print(err)
+        return 1  # writer: the tree must exist; clean non-zero, same one line
     try:
         val = json.loads(args.value)
     except json.JSONDecodeError:
@@ -475,7 +525,10 @@ def memory_set(args):
 
 def memory_append(args):
     """Append to experiences/contracts array (JSON object)"""
-    ensure_multi_agent_dir()
+    err = _ensure_tree()
+    if err:
+        print(err)
+        return 1  # writer: the tree must exist; clean non-zero, same one line
     try:
         entry = json.loads(args.entry)
     except json.JSONDecodeError:
@@ -492,7 +545,10 @@ def memory_append(args):
 
 def memory_list(args):
     """List an overview of each shared-memory section"""
-    ensure_multi_agent_dir()
+    err = _ensure_tree()
+    if err:
+        print(err)
+        return 0  # observer: fail-soft, one human line
     data = load_json(MEMORY_FILE)
     print("=== Shared Memory ===")
     if not data:
@@ -1048,7 +1104,12 @@ def doctor_command(args):
 
 def init_command(args):
     """Initialize the multi-agent directory structure (+ git bootstrap when absent)"""
-    ensure_multi_agent_dir()
+    err = _ensure_tree()
+    if err:
+        # Explicit init must not pretend success: the same one human line the
+        # observers print, but with a clean non-zero exit.
+        print(err)
+        return 1
     ensure_git_repo()
     print(f"Initialized: {MULTI_AGENT_DIR}")
     print(f"  - {INDEX_FILE}")
@@ -1144,6 +1205,17 @@ def main():
 
     args = parser.parse_args()
 
+    # Fail-soft net: an OSError escaping any handler must surface as ONE human
+    # line, never a traceback (exit 1: a writer must not pretend success).
+    try:
+        return _dispatch(args, parser)
+    except OSError as exc:
+        print(_bootstrap_error_line(exc))
+        return 1
+
+
+def _dispatch(args, parser) -> int:
+    """Route the parsed args to its command handler (called under the fail-soft net)."""
     # routing
     if args.command == "init":
         return init_command(args)
