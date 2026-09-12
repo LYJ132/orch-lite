@@ -1,0 +1,8 @@
+# Normalize line endings to LF so the hooks and CLI stay runnable everywhere
+# (Windows checkouts otherwise get CRLF, which breaks `#!/usr/bin/env python3`).
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+# Extensionless CLI script (no suffix for the glob rules above to match).
+scripts/multi-agent text eol=lf
