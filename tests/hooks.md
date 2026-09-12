@@ -111,7 +111,9 @@ sections:
 
 Both contract sections come from SKILL.md only (single source of truth — the
 hook holds no second copy; the extraction table in the hook just names
-heading prefixes and labels).
+heading prefixes and labels). Iron-rule marker tags inside these sections
+(`<EXTREMELY-IMPORTANT>` blocks) ride along verbatim — the injection shape
+itself is unchanged.
 
 All paths derive from `__file__` (zero hardcoded absolute paths), so the
 skill is portable; any error still yields exactly one additionalContext
