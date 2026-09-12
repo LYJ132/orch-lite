@@ -20,6 +20,11 @@ Graceful degradation: any error → best-effort output; the hook always exits 0
 and prints exactly one {"additionalContext": ...} JSON — it never crashes the
 session.
 """
+# Lazy annotations: builtin-generic / `X | None` annotations must never be
+# evaluated at import time, or an interpreter older than 3.9/3.10 turns the
+# hook into an uncaught traceback before main() (fail-soft contract).
+from __future__ import annotations
+
 import json
 import subprocess
 import sys

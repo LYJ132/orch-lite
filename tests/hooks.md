@@ -10,6 +10,8 @@ Run each line below from the skill root to verify behavior:
 HOOKS=hooks
 ```
 
+> Executable version of this matrix: `bash tests/run.sh` (self-contained, no network; ends with a per-case PASS/FAIL summary and `ALL PASS`, exit 0).
+
 ---
 
 ## Hook 1: `dispatch-validate.py` — PreToolUse, matcher `Agent|Task`, deny

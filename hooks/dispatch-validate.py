@@ -23,6 +23,11 @@ instance_id is RETIRED: no longer a required or valid field; if present it is
 ignored. Malformed stdin or any internal error → silent exit 0 — the hook
 never blocks a call by accident.
 """
+# Lazy annotations: `str | None` must not be evaluated at import time, or an
+# interpreter older than 3.10 turns the hook into an uncaught traceback
+# before main() (fail-soft contract).
+from __future__ import annotations
+
 import json
 import re
 import sys
