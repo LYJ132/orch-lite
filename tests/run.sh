@@ -310,9 +310,9 @@ case_3_6() {
 }
 
 case_3_5() {
-  # Byte-identity: both SKILL.md contract segments in the hook payload match
-  # the corresponding SKILL.md slices (mirrors tests/hooks.md 3.5). Runs in
-  # the repo — session-init is idempotent/read-only there by design.
+  # Byte-identity: all three SKILL.md contract segments in the hook payload
+  # match the corresponding SKILL.md slices (mirrors tests/hooks.md 3.5).
+  # Runs in the repo — session-init is idempotent/read-only there by design.
   local json
   json="$(printf '{}' | python3 hooks/session-init.py)" || return 1
   python3 - "$json" <<'PY'
@@ -338,6 +338,7 @@ def skill_slice(lines, prefix):
 
 lines = open("SKILL.md").read().splitlines()
 for prefix, label in (
+    ("## 5 Invariants (memorize)", "5 Invariants (memorize)"),
     ("## Request Routing", "Request Routing"),
     ("## Dispatch Package (MUST template)", "Dispatch Package (MUST template)"),
 ):
@@ -345,7 +346,7 @@ for prefix, label in (
     hh, sh = hashlib.sha256(h.encode()).hexdigest(), hashlib.sha256(s.encode()).hexdigest()
     if h != s or hh != sh:
         sys.exit(f"{label} not byte-identical (hook {hh[:12]} vs skill {sh[:12]})")
-print("both segments byte-identical")
+print("all three segments byte-identical")
 PY
 }
 
@@ -387,7 +388,7 @@ case_si_audit_no_skillmd() {
   python3 - "$d" <<'PY'
 import json, sys, pathlib
 ctx = json.loads(pathlib.Path(sys.argv[1], "o.json").read_text())["additionalContext"]
-assert ctx.count("(contract section missing in SKILL.md)") == 2, "both sections should fall back"
+assert ctx.count("(contract section missing in SKILL.md)") == 3, "all three contract sections should fall back"
 assert "[orch-lite]" in ctx
 PY
 }
