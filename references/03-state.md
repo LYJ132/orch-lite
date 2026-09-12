@@ -109,7 +109,7 @@ Worktree isolation prevents concurrent edits from colliding; integration conflic
 | `worktree remove --task-id [--force]` | Main, T2 | remove the worktree (refuses if uncommitted unless `--force`); branch untouched |
 | `worktree merge --feature-id [--into main]` | Main | integrate feature branch into main (git merge-tree pre-check) |
 | `memory list` / `memory get --key <path>` / `memory set --key <path> --value <JSON>` / `memory append --array experiences\|contracts --entry <JSON>` | anyone | read/write shared memory (CLI takes internal flock) |
-| `doctor [--compare-dir DIR]` | anyone (main, hooks) | hygiene scan: dirty worktrees / stale worktrees / task_id-authored commits on main / install drift (check 4: HEAD's tracked sources by blob hash vs `--compare-dir`, default `~/.agents/skills/orch-lite`, silent when that copy is absent); always exits 0 (feeds session-init Health) |
+| `doctor [--compare-dir DIR]` | anyone (main, hooks) | hygiene scan: (1) dirty worktrees / (2) stale worktrees / (3) task_id-authored commits made directly on main (first-parent view — merge-integrated feature commits are not flagged) / (4) install drift: HEAD's tracked sources by blob hash vs `--compare-dir` (default `~/.agents/skills/orch-lite`, silent when that copy is absent); always exits 0 (feeds session-init Health) |
 
 ### 5.1 Example session
 ```

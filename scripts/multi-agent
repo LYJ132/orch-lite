@@ -26,9 +26,9 @@ Commands:
     worktree remove       Remove a worktree (never deletes the branch)
     worktree merge        Pre-check with merge-tree, then merge feature/<feature-id> into a branch
     doctor                Hygiene scan: dirty worktrees, stale worktrees (index cross-read),
-                          task_id-authored commits on main, HEAD-vs-copy install drift
-                          (--compare-dir DIR, default ~/.agents/skills/orch-lite);
-                          always exits 0
+                          task_id-authored commits made directly on main (first-parent scan),
+                          HEAD-vs-copy install drift (--compare-dir DIR, default
+                          ~/.agents/skills/orch-lite); always exits 0
     init                  Initialize the multi-agent directory structure (+ git bootstrap when absent)
 """
 
@@ -791,7 +791,10 @@ def worktree_merge(args):
 # of failing, so the probe degrades cleanly.
 
 # Task IDs are `{role}-{YYYYMMDD}-{seq}`; a commit author matching this on
-# main means a child committed to the main working tree (N14 violation).
+# main's first-parent chain means a child committed directly to main (branch
+# discipline violation). Commits integrated by the main agent's merge land on
+# second parents and are invisible to the first-parent scan — legitimate
+# integration must never be flagged.
 TASK_AUTHOR_RE = re.compile(r"^[a-z]+-[0-9]{8}-[0-9]+$")
 
 # (4) Dual-install drift. The skill source is deployed to several installs
@@ -922,8 +925,10 @@ def _read_index_tasks() -> Optional[Dict[str, Any]]:
 
 def doctor_command(args):
     """Repo hygiene scan: (1) dirty worktrees, (2) stale worktrees via index
-    cross-read, (3) task_id-authored commits on main, (4) HEAD-vs-copy install
-    drift (--compare-dir, default ~/.agents/skills/orch-lite). Always exits 0."""
+    cross-read, (3) task_id-authored commits made directly on main (a
+    first-parent scan, so merge-integrated feature commits do not surface),
+    (4) HEAD-vs-copy install drift (--compare-dir, default
+    ~/.agents/skills/orch-lite). Always exits 0."""
     code, _ = _run_git("rev-parse", "--is-inside-work-tree")
     if code != 0:
         print("(doctor: not a repo)")
@@ -950,10 +955,14 @@ def doctor_command(args):
             if (tasks.get(tid) or {}).get("status") in TASK_TERMINAL_STATUSES:
                 findings.append(f"stale: {tid} (run: worktree remove --task-id {tid})")
 
-    # (3) task_id-authored commits on main -- last ~30, only checked while on main.
+    # (3) task_id-authored commits made directly on main -- last ~30 on main's
+    # first-parent chain, only checked while on main. --first-parent walks the
+    # merge commits themselves, not the task-authored commits they brought in,
+    # so a properly integrated feature shows no violation while a direct
+    # commit on main still does.
     bcode, bout = _run_git("branch", "--show-current")
     if bcode == 0 and bout.strip() == "main":
-        lcode, lout = _run_git("log", "-n", "30", "--format=%an%x00%h")
+        lcode, lout = _run_git("log", "--first-parent", "-n", "30", "--format=%an%x00%h")
         if lcode == 0:
             for line in lout.splitlines():
                 author, sep, short = line.partition("\x00")
@@ -1063,7 +1072,8 @@ def main():
     doctor_p = subparsers.add_parser(
         "doctor",
         help="Hygiene scan: dirty worktrees, stale worktrees (index cross-read), task_id-authored "
-             "commits on main, HEAD-vs-copy install drift (always exits 0)")
+             "commits made directly on main via a first-parent scan, HEAD-vs-copy install drift "
+             "(always exits 0)")
     doctor_p.add_argument(
         "--compare-dir", default=DEFAULT_COMPARE_DIR,
         help="Check (4): install to compare HEAD's tracked sources against "

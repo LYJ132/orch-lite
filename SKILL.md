@@ -28,8 +28,8 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 ## 5 Invariants (memorize)
 
 1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package + `run_in_background: true` (non-blocking background: the main session does not wait, returns to the user immediately, and waits for the next request). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
-2. **Isolation is gated on concurrency.** Single task (no other child running) → child writes directly in the working tree, no worktree. Concurrency present → give the newcomer a worktree (`.worktrees/<task_id>/`). One feature = one long-lived `feature/<feature_id>` branch.
-3. **Children never touch main.** They commit only in their write area (worktree or working tree, per #2), authored as `<task_id>`; integration is the main agent's job.
+2. **Isolation is gated on concurrency; `main` is never a child's write area.** Single task (no other child running) → child works in the primary working tree on a `feature/<feature_id>` branch it creates and checks out before its first write — never committing on `main`. Concurrency present → give the newcomer a worktree (`.worktrees/<task_id>/`) on its `feature/<feature_id>` branch. One feature = one long-lived branch.
+3. **Children never commit on main.** They commit only in their write area (worktree, or working tree checked out on their `feature/<feature_id>` branch, per #2), authored as `<task_id>`; `main` only receives integration merges, made by the main agent.
 4. **Commit incrementally before reporting.** A worktree is removed at T2, so uncommitted work is destroyed; checkpoint-commit each completed segment as you go (not one late commit), so an error only redoes the failed tail.
 5. **Check state before dispatching.** Is a child still running? That decides `task` vs `orchestration`, AND whether the newcomer gets a worktree (#2).
 
@@ -38,8 +38,9 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 ## Mental Model
 
 ```
-main ──dispatch──▶ child (write area = working tree if no concurrency,
-  │                    else .worktrees/<task_id>/; commits as <task_id>)
+main ──dispatch──▶ child (write area = working tree checked out on
+  │                    feature/<feature_id> if no concurrency, else
+  │                    .worktrees/<task_id>/; commits as <task_id>)
   │                    │
   │                    ▼
   │              feature/<feature_id>  (long-lived branch)
@@ -76,7 +77,7 @@ Every dispatch prompt has exactly four parts, in order:
 2. **Six-rule MUST block** (copy verbatim, filling task specifics into rule 2):
    > Binding rules — MUST:
    > 1. You MUST do all work with your own tools; you MUST NOT dispatch or derive further agents.
-   > 2. You MUST work only in the workspace named for you — per concurrency state (no other task running → the working tree; a task already running → `.worktrees/<task_id>/`) — and MUST NOT write outside it.
+   > 2. You MUST work only in the workspace named for you — per concurrency state (no other task running → the working tree on a `feature/<feature_id>` branch you create first; a task already running → `.worktrees/<task_id>/`) — MUST NOT commit on main (`main` only receives integration merges by the main agent), and MUST NOT write outside it.
    > 3. You MUST commit incrementally, authored as `<task_id>`, and always before reporting.
    > 4. You MUST check `multi-agent/memory/shared.json` and the index before re-deriving anything non-obvious.
    > 5. You MUST follow every entry in memory `contracts[]`.
@@ -91,7 +92,7 @@ Every dispatch prompt has exactly four parts, in order:
 
 ## Main Agent Action Table
 
-**Children never commit to main — only inside their own worktree.** The primary tree is used only by the main agent for integration merges.
+**Children never commit on main — they commit only inside their own write area: their worktree, or the primary working tree checked out on their `feature/<feature_id>` branch.** `main` itself is touched by the main agent only, for integration merges.
 
 ### NEW_TASK (user submits a request)
 1. `index list` → recover state
@@ -134,7 +135,7 @@ Every dispatch prompt has exactly four parts, in order:
 | `worktree remove --task-id [--force]` | Main, T2: remove (refuses if uncommitted); branch untouched |
 | `worktree merge --feature-id [--into main]` | Main: integrate (merge-tree pre-check) |
 | `memory list/get/set/append` | shared memory (CLI takes internal flock during set/append) |
-| `doctor [--compare-dir DIR]` | hygiene scan (dirty/stale worktrees, commits on main, HEAD-vs-copy install drift vs `~/.agents/skills/orch-lite`); always exits 0 |
+| `doctor [--compare-dir DIR]` | hygiene scan (dirty/stale worktrees, task_id-authored commits made directly on `main` — first-parent view, so merge-integrated feature commits stay clean — plus HEAD-vs-copy install drift vs `~/.agents/skills/orch-lite`); always exits 0 |
 
 Full params in [03-state.md](references/03-state.md).
 
