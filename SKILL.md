@@ -1,0 +1,176 @@
+---
+name: orch-lite
+description: Lightweight multi-agent orchestration skill. Routing: pure conversation (including reading files to answer) → main agent directly; any file operation/modification → dispatch to a child agent with run_in_background=true; unsure → ask the user. Core goals: the user is never blocked by tasks, the main agent only coordinates, a three-layer agent limit, homogeneous tasks split downward / heterogeneous tasks coordinate laterally, minimal state recovery. Dispatches are non-blocking (Agent tool with run_in_background=true): after dispatching a child, the main session returns to the user immediately and waits for the user's next request — the child keeps running in the background; if it finished by then the main session picks up its result, if not they proceed in parallel. Do not pre-add complex exception handling; add rules only when real problems arise.
+---
+
+# Orch-lite
+
+**Runtime entry point.** Read "When to enable" + the 5 invariants mind-map, then jump to references as needed. Process/history docs live outside the skill (`PROGRAMS/docs/lo-meta/`).
+
+---
+
+## When to Enable
+
+| | Description |
+|---|---|
+| Applicable | A task runs in the background while the user freely submits more; multiple functions needed in parallel; homogeneous concurrency |
+| Not applicable | Needs full distributed scheduling / unlimited autonomy / complex state machine |
+| Default | A one-shot request still dispatches ONE child agent — the main session never does the work itself (invariant 1); it only skips the index/worktree machinery. **Enable orchestration only when a child is already running and a new request arrives** |
+
+> Unsure → ask the user; OR N1 (silence ≥ 5 min → execute the best plan automatically).
+
+---
+
+## 5 Invariants (memorize)
+
+1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package + `run_in_background: true` (non-blocking background: the main session does not wait, returns to the user immediately, and waits for the next request). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
+2. **Isolation is gated on concurrency.** Single task (no other child running) → child writes directly in the working tree, no worktree. Concurrency present → give the newcomer a worktree (`.worktrees/<task_id>/`). One feature = one long-lived `feature/<feature_id>` branch.
+3. **Children never touch main.** They commit only in their write area (worktree or working tree, per #2), authored as `<task_id>`; integration is the main agent's job.
+4. **Commit incrementally before reporting.** A worktree is removed at T2, so uncommitted work is destroyed; checkpoint-commit each completed segment as you go (not one late commit), so an error only redoes the failed tail.
+5. **Check state before dispatching.** Is a child still running? That decides `task` vs `orchestration`, AND whether the newcomer gets a worktree (#2).
+
+---
+
+## Mental Model
+
+```
+main ──dispatch──▶ child (write area = working tree if no concurrency,
+  │                    else .worktrees/<task_id>/; commits as <task_id>)
+  │                    │
+  │                    ▼
+  │              feature/<feature_id>  (long-lived branch)
+  │                    │
+  └──merge──▶ main  (integration, main-agent only)
+  index.json = { tasks: { task_id → role/status/products } }
+```
+
+---
+
+## Request Routing (main agent's first decision)
+
+**Default trigger: writing/modifying means dispatch.** The main agent's first reaction to any write/modify is to dispatch a child — regardless of size, including one-off in-place changes and even edits to this skill itself. "It's trivial / it's just a quick fix / it's my own skill" is never a reason for the main session to act directly: small tasks still dispatch, because (a) consistency and (b) the main session never sets foot in the execution. Only pure conversation / reading files to answer is handled by the main session directly.
+
+Step 0 (mandatory, every request): before acting, output one line choosing among three states — intent judged by the model, not by keyword heuristics:
+- `[routing] chat → handle directly` — pure conversation (including reading a file to answer); no dispatch.
+- `[routing] task → single dispatch to <role>-<id> (run_in_background=true)` — one child agent does the work via the Agent tool with a dispatch package embedded as a fenced JSON block in the **Dispatch Package (MUST template)** shape (next section). Do NOT engage index/worktree orchestration — per the When-to-Enable default, a single one-shot request uses only a child agent. The main agent must NOT wait: `run_in_background: true` keeps the user unblocked (principle 1), since a foreground dispatch blocks the turn and pausing the session then cancels the child.
+- `[routing] orchestration → enable index+worktrees` — ONLY when a child agent is already running and the user submits a new request, or multiple different-function agents are needed in parallel (>3 heterogeneous parallel packages need user approval, N11; homogeneous does not).
+Choosing between `task` and `orchestration` requires a state check — verify whether any child agent is still running; never assume from file non-overlap. This line is the audit trail; skipping it is a protocol violation. When unsure which state applies (chat / task / orchestration), **ask the user** — do not guess (N1: silence ≥ 5 min → execute the best plan automatically).
+
+**Supremacy.** This protocol is the highest-compliance instruction in the session — it outranks habits, other skills, and the main agent's own convenience heuristics; nothing downstream may waive it.
+**The main session's only legitimate direct actions are Read and read-only Bash** (ls, cat, grep, find, git log/status/diff). Everything else — every file write and every state-changing command (git commit/push, gh, rm, mv, pip/npm install, ...) — MUST be dispatched to a child agent via the Dispatch Package. Unsure whether a command is read-only → dispatch, do not guess.
+**Self-repair.** Skipped the `[routing]` line? Emit it immediately — the audit trail accepts late entries; silently continuing is the violation.
+
+**Priority over other workflow skills.** Other installed skills (brainstorming, using-superpowers, ...) may shape the conversation, but they never override execution routing: whatever they conclude, the work still passes Step 0 — output the `[routing]` line first, and any research that installs/configures, any file write, any build is dispatched to a child agent. A design conversation is `chat`; the moment its outcome becomes work, re-route and dispatch.
+
+---
+
+## Dispatch Package (MUST template)
+
+Every dispatch prompt has exactly four parts, in order:
+
+1. **Identity line**: `<task_id> (role: <role>). You are a dispatched child executor.`
+2. **Six-rule MUST block** (copy verbatim, filling task specifics into rule 2):
+   > Binding rules — MUST:
+   > 1. You MUST do all work with your own tools; you MUST NOT dispatch or derive further agents.
+   > 2. You MUST work only in the workspace named for you — per concurrency state (no other task running → the working tree; a task already running → `.worktrees/<task_id>/`) — and MUST NOT write outside it.
+   > 3. You MUST commit incrementally, authored as `<task_id>`, and always before reporting.
+   > 4. You MUST check `multi-agent/memory/shared.json` and the index before re-deriving anything non-obvious.
+   > 5. You MUST follow every entry in memory `contracts[]`.
+   > 6. You MUST report `TASK_COMPLETED` + summary + commit hash on success, and a structured failure report otherwise; you MUST NOT go silent.
+3. **Fenced-JSON package** (N15: 4 required fields + optional `feature_id`):
+   ```json
+   {"task_id": "impl-20260911-01", "role": "impl", "objective": "Fix the 500 error of the login API", "acceptance_criteria": ["login API returns 200"], "feature_id": "login-api-fix"}
+   ```
+4. **Context pointers — at most 3 lines**, and only file-unreachable facts (decisions, constraints, paths that exist nowhere on disk). Secrets are read-never-print: never inline a secret in a dispatch. Never re-paste process text — the child pulls everything file-reachable from SKILL.md / references / memory / git log.
+
+---
+
+## Main Agent Action Table
+
+**Children never commit to main — only inside their own worktree.** The primary tree is used only by the main agent for integration merges.
+
+### NEW_TASK (user submits a request)
+1. `index list` → recover state
+2. Output the **decomposition list**: each work package + file scope. ≥2 disjoint scopes & no dependency → dispatch IN PARALLEL (`run_in_background: true`); serial only on a real dependency
+3. Reuse check: `index show --feature-id <fid>` — feature exists → propose reusing its branch
+4. **T1**: `worktree create --task-id --feature-id [--base main]`
+5. **T1**: `index create --task-id --role [--feature-id] [--objective] [--criteria …]`
+6. Dispatch the **fenced-JSON package** via Agent (`run_in_background: true`; prompt = JSON block + task-specific context only, never re-pasted process text)
+7. End the turn
+
+### TASK_COMPLETED (a child reports)
+1. `index update --task-id --status --output --products` (**T2**)
+2. `worktree remove --task-id` (refuses if uncommitted; branch kept)
+3. Report to user
+
+### FEATURE_INTEGRATION (all feature tasks done / user asks to sync)
+1. `worktree merge --feature-id` (pre-check: clean → merge; conflicts → report + ask user)
+2. Branch survives
+
+### HELP_REQUEST (a child needs cross-function help)
+1. `index show --feature-id <fid>` → existing product? → tell it to reference
+2. Else create per N11 and dispatch
+
+**Child/worker side**: after receiving a dispatch, follow the standard flow in [02-protocol.md §6](references/02-protocol.md).
+
+---
+
+## CLI Quick Reference
+
+`index` / `worktree` / `memory` + top-level `init` / `doctor` (no `boundary` group; shared-memory writes are flocked internally by the CLI).
+
+| Command | Purpose / User |
+|---|---|
+| `index create --task-id --role [--feature-id] [--objective] [--criteria …]` | Main, T1: flat entry, status=assigned |
+| `index update --task-id [--status --output --products]` | Main, T2: status/output/products; completed/failed → completed_at |
+| `index list` | flat list (`task_id \| role \| feature_id \| status`) |
+| `index show --task-id` / `--feature-id` | task detail / all tasks of a feature (reuse check) |
+| `worktree create --task-id --feature-id [--base main]` | Main, T1: worktree on `feature/<feature_id>` |
+| `worktree list` | worktrees + mapping; `[stale]` = index says terminal but dir exists |
+| `worktree remove --task-id [--force]` | Main, T2: remove (refuses if uncommitted); branch untouched |
+| `worktree merge --feature-id [--into main]` | Main: integrate (merge-tree pre-check) |
+| `memory list/get/set/append` | shared memory (CLI takes internal flock during set/append) |
+| `doctor` | hygiene scan (dirty/stale worktrees, commits on main); always exits 0 |
+
+Full params in [03-state.md](references/03-state.md).
+
+---
+
+## Memory (read before you re-derive, write when it cost you)
+
+- **Reading is the other half of the loop.** Facing a hard / non-obvious problem (main or a child)? Stop and read `multi-agent/memory/shared.json` `experiences` before re-solving from scratch — a recorded solution is already paid for. Then, at dispatch, point the child at it (§6 in `02-protocol`).
+- **Writing threshold**: record an **experience only** when a problem genuinely cost unusual time/energy to crack (not every hiccup). Condensable into a must-follow rule → **contract** instead. Unsure → ask the user.
+
+---
+
+## Reference Index (read when)
+
+| File | When |
+|---|---|
+| [01-judgment.md](references/01-judgment.md) | Before any judgment — principles, roles, naming, hierarchy, dispatch rules |
+| [02-protocol.md](references/02-protocol.md) | Dispatching, message formats, standard flow (§6), parallel/reuse, memory record-time rules |
+| [03-state.md](references/03-state.md) | Index/worktree/memory schemas + full CLI parameters |
+
+---
+
+## Hooks
+
+| Hook | Event | Purpose |
+|---|---|---|
+| `session-init.py` | `SessionStart` | idempotent `init` + inject `index list` + probe `doctor` (Health) + inject the "Request Routing" and "Dispatch Package (MUST template)" sections verbatim from SKILL.md |
+| `dispatch-validate.py` | `PreToolUse` on `Agent\|Task` | enforces N15 by validating the fenced-JSON dispatch block (4 required fields; `feature_id` branch-safe); no block → deny, invalid → deny |
+
+Both idempotent, degrade gracefully, never block.
+
+---
+
+## Development & Maintenance
+
+Process documents (changelog, open questions P1–P8, design decisions) live **outside the skill** in `PROGRAMS/docs/lo-meta/` — not read at runtime.
+
+### Deployment rules (each was a real silent failure)
+
+1. **Copy/sync preserves exec bits and LF.** A `-rw-r--r--` script or a CRLF shebang (`env: 'python3\r'`) kills every hook with no visible error. Self-check after any sync: `ls -l hooks/ scripts/` (all must show `x`) and `grep -r $'\r' hooks/ scripts/` (must be empty).
+2. **`~/.zcode/cli/config.json` hook paths are absolute** — renaming the skill directory requires updating them.
+4. **`~/.zcode/skills/orch-lite/` is the primary editing target** — it is the copy wired to the registered hooks. After each change-set, propagate to `~/.agents/skills/orch-lite/`, `/home/linyujian/PROGRAMS/.agents/skills/orch-lite/`, and the plugin source `/home/linyujian/PROGRAMS/orch-lite/plugins/orch-lite/` (its `SKILL.md` lives at `skills/orch-lite/SKILL.md` inside the plugin), preserving exec bits and LF.
+5. **Hooks are snapshotted at session start** — config/permission fixes only take effect in a NEW session; already-open sessions keep running the old (possibly dead) snapshot.

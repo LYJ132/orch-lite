@@ -1,0 +1,984 @@
+#!/usr/bin/env python3
+"""
+Orch-lite CLI Tool
+
+Task-centric state: agents are ephemeral executors (fresh session per dispatch,
+state lives in files); task_id is the sole primary key -- index key, git commit
+author (GIT_AUTHOR_NAME=<task_id>), worktree dir name.
+
+Usage:
+    multi-agent <command> [options]
+
+Commands:
+    index create          T1 assign time point: create a task entry (flat task map)
+    index update          T2 status-update time point: update status/output/time
+    index list            Flat task list (task_id | role | feature_id | status)
+    index show            Query a task's detail (--task-id) or all tasks of a feature (--feature-id)
+    memory list           List overview of each shared-memory section
+    memory get            Read memory (dotted path)
+    memory set            Write memory (dotted path + JSON value)
+    memory append         Append to experiences/contracts arrays
+    worktree create       Create .worktrees/<task-id>/ on long-lived branch feature/<feature-id>
+    worktree list         List worktrees under .worktrees/, grouped by feature branch ([stale] via index cross-read)
+    worktree remove       Remove a worktree (never deletes the branch)
+    worktree merge        Pre-check with merge-tree, then merge feature/<feature-id> into a branch
+    doctor                Hygiene scan: dirty worktrees, stale worktrees (index cross-read),
+                          task_id-authored commits on main (always exits 0)
+    init                  Initialize the multi-agent directory structure (+ git bootstrap when absent)
+"""
+
+import sys
+import os
+import re
+import json
+import argparse
+import contextlib
+import subprocess
+from pathlib import Path
+from datetime import datetime
+from typing import Optional, List, Dict, Any
+
+try:
+    import fcntl  # POSIX exclusive locking for shared-memory writes
+except ImportError:  # non-POSIX platform: degrade to lock-free behavior with a warning
+    fcntl = None
+
+# Constants
+PROJECT_ROOT = Path.cwd()
+MULTI_AGENT_DIR = PROJECT_ROOT / "multi-agent"
+INDEX_FILE = MULTI_AGENT_DIR / "index.json"
+MEMORY_FILE = MULTI_AGENT_DIR / "memory" / "shared.json"
+MEMORY_LOCK_FILE = MULTI_AGENT_DIR / "memory" / ".lock"
+GITIGNORE_FILE = PROJECT_ROOT / ".gitignore"
+WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
+# Kept out of the repo: runtime state (this tool's own writes) and worktrees.
+GITIGNORE_LINES = ["multi-agent/", ".worktrees/"]
+
+
+def ensure_multi_agent_dir():
+    """Ensure the multi-agent directory structure exists"""
+    MULTI_AGENT_DIR.mkdir(exist_ok=True)
+    (MULTI_AGENT_DIR / "comm").mkdir(exist_ok=True)
+    (MULTI_AGENT_DIR / "memory").mkdir(exist_ok=True)
+
+    if not INDEX_FILE.exists():
+        INDEX_FILE.write_text('{"tasks": {}}')
+    if not MEMORY_FILE.exists():
+        MEMORY_FILE.write_text('{"common_knowledge": {}, "experiences": [], "task_patterns": {}, "contracts": []}')
+
+
+def _run_git(*git_args: str) -> tuple:
+    """Run a git command in PROJECT_ROOT. Returns (returncode, combined output). Never raises."""
+    try:
+        proc = subprocess.run(
+            ["git", *git_args],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, str(exc)
+
+
+def ensure_git_repo():
+    """Bootstrap a git repository when absent (the worktree model needs a repo with a baseline commit).
+
+    Idempotent and zero-risk: if already inside a repo, change nothing; any git
+    failure degrades to a warning, never a crash of the CLI.
+    """
+    code, out = _run_git("rev-parse", "--is-inside-work-tree")
+    if code == 0 and out == "true":
+        print("Git: already a git repository, skipping bootstrap")
+        return
+
+    # git init -b main; fallback for old git without -b: init then rename the unborn branch.
+    code, out = _run_git("init", "-b", "main")
+    if code != 0:
+        code, out = _run_git("init")
+        if code == 0:
+            bcode, bout = _run_git("branch", "-m", "main")
+            if bcode != 0:
+                print(f"Warning: could not rename branch to main ({bout}); staying on default branch")
+    if code != 0:
+        print(f"Warning: git bootstrap failed, continuing without a repository ({out})")
+        return
+    print("Git: initialized repository on branch 'main'")
+
+    # .gitignore: create, or append only the missing lines to an existing one.
+    try:
+        content = GITIGNORE_FILE.read_text() if GITIGNORE_FILE.exists() else ""
+    except OSError:
+        content = ""
+    missing = [line for line in GITIGNORE_LINES if line not in content.splitlines()]
+    if missing:
+        try:
+            with GITIGNORE_FILE.open("a") as f:
+                if content and not content.endswith("\n"):
+                    f.write("\n")
+                f.write("\n".join(missing) + "\n")
+            print(f"Git: wrote .gitignore entries ({', '.join(missing)})")
+        except OSError as exc:
+            print(f"Warning: could not update .gitignore ({exc})")
+
+    # Baseline commit. The .gitignore written above is staged first so it lands
+    # in the baseline commit instead of lingering untracked; --allow-empty stays
+    # as the safety flag for the case where the gitignore write changed nothing.
+    # The inline identity is mandatory: fresh environments may have no git user
+    # configured, and without it the commit would fail.
+    code, out = _run_git("add", ".gitignore")
+    if code != 0:
+        print(f"Warning: could not stage .gitignore ({out})")
+    code, out = _run_git(
+        "-c", "user.name=orchestrator-init",
+        "-c", "user.email=orchestrator@local",
+        "commit", "--allow-empty", "-m", "chore: orchestrator baseline",
+    )
+    if code == 0:
+        print("Git: created baseline commit (chore: orchestrator baseline)")
+    else:
+        print(f"Warning: baseline commit failed ({out})")
+
+
+def load_json(file: Path) -> Dict[str, Any]:
+    """Load a JSON file"""
+    try:
+        return json.loads(file.read_text())
+    except (json.JSONDecodeError, FileNotFoundError):
+        return {}
+
+
+def save_json(file: Path, data: Dict[str, Any]):
+    """Save a JSON file (atomic write)"""
+    tmp = file.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    tmp.replace(file)
+
+
+# ==================== Index Commands ====================
+# Task-centric flat map: index.json = {"tasks": {"<task_id>": {role, feature_id (optional),
+# status, objective, acceptance_criteria, output, products, created_at, completed_at}}}.
+# Agents are ephemeral executors, so there is no agents grouping: task_id is the sole
+# primary key. On load, a legacy {"agents": {...}} file is auto-migrated (flattened)
+# and rewritten, with a notice printed.
+
+TASK_TERMINAL_STATUSES = ("completed", "failed")
+
+
+def _migrate_index(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Flatten the legacy {"agents": {aid: {tasks: [...]}}} schema into {"tasks": {...}}.
+
+    Each agent's tasks are carried over (role is taken per task when present, else
+    from the agent record). Entries without a usable task_id, duplicate task_ids, or
+    stale entries lacking both objective and status are dropped. The migrated file is
+    rewritten immediately and a notice is printed.
+    """
+    tasks: Dict[str, Any] = {}
+    dropped = 0
+    for _agent_id, agent in raw.get("agents", {}).items():
+        if not isinstance(agent, dict):
+            dropped += 1
+            continue
+        agent_role = agent.get("role", "unknown")
+        for t in agent.get("tasks", []):
+            if not isinstance(t, dict):
+                dropped += 1
+                continue
+            tid = t.get("task_id")
+            if not tid or tid in tasks:
+                dropped += 1
+                continue
+            entry = {
+                "role": t.get("role") or agent_role,
+                "status": t.get("status"),
+                "objective": t.get("objective") or "",
+                "acceptance_criteria": list(t.get("acceptance_criteria") or []),
+                "output": t.get("output"),
+                "products": list(t.get("products") or []),
+                "created_at": t.get("created_at"),
+                "completed_at": t.get("completed_at"),
+            }
+            if t.get("feature_id"):
+                entry["feature_id"] = t["feature_id"]
+            # Drop stale entries that carry neither an objective nor a status.
+            if not entry["objective"] and not entry["status"]:
+                dropped += 1
+                continue
+            tasks[tid] = entry
+
+    migrated = {"tasks": tasks}
+    save_json(INDEX_FILE, migrated)
+    print(f"Migration: index.json converted from the legacy agents schema to the flat task map "
+          f"({len(tasks)} tasks kept, {dropped} entries dropped)")
+    return migrated
+
+
+def _load_index() -> Dict[str, Any]:
+    """Load index.json, auto-migrating the legacy agents schema to the flat task map."""
+    ensure_multi_agent_dir()
+    index = load_json(INDEX_FILE)
+    if isinstance(index, dict) and "tasks" not in index and "agents" in index:
+        index = _migrate_index(index)
+    if not isinstance(index, dict):
+        return {"tasks": {}}
+    return index
+
+
+def index_create(args):
+    """T1 assign time point: create a task entry (flat task map, status=assigned)"""
+    index = _load_index()
+    tasks = index.setdefault("tasks", {})
+
+    if args.task_id in tasks:
+        print(f"Error: task {args.task_id} already exists")
+        return 1
+
+    entry = {
+        "role": args.role,
+        "status": "assigned",
+        "objective": args.objective or "",
+        "acceptance_criteria": list(args.criteria) if args.criteria else [],
+        "output": None,
+        "products": [],
+        "created_at": datetime.now().astimezone().isoformat(),
+        "completed_at": None,
+    }
+    if args.feature_id:
+        entry["feature_id"] = args.feature_id
+    tasks[args.task_id] = entry
+    save_json(INDEX_FILE, index)
+    feature_note = f", feature {args.feature_id}" if args.feature_id else ""
+    print(f"Registered task {args.task_id} (role={entry['role']}{feature_note}, status=assigned)")
+    return 0
+
+
+def index_update(args):
+    """T2 status-update time point: update task status/output/products (record completed time when terminal)"""
+    index = _load_index()
+    task = index.get("tasks", {}).get(args.task_id)
+    if not task:
+        print(f"Error: task {args.task_id} does not exist")
+        return 1
+
+    if args.status:
+        task["status"] = args.status
+    if args.output is not None:
+        task["output"] = args.output
+    if args.products is not None:
+        task["products"] = list(args.products)
+    if args.status in TASK_TERMINAL_STATUSES and not task.get("completed_at"):
+        task["completed_at"] = datetime.now().astimezone().isoformat()
+
+    save_json(INDEX_FILE, index)
+    print(f"Updated task {args.task_id}: status={task.get('status')}")
+    return 0
+
+
+def index_list(args):
+    """Flat task list: task_id | role | feature_id | status"""
+    index = _load_index()
+    tasks = index.get("tasks", {})
+    if not tasks:
+        print("Index is empty")
+        return 0
+
+    print("=== Task Index ===")
+    for tid, t in tasks.items():
+        feature = t.get("feature_id") or "-"
+        print(f"  {tid} | {t.get('role', '-')} | {feature} | {t.get('status', '-')}")
+    return 0
+
+
+def index_show(args):
+    """Show one task's detail (--task-id) or all tasks of a feature (--feature-id, the reuse check)"""
+    index = _load_index()
+    tasks = index.get("tasks", {})
+
+    if args.task_id:
+        task = tasks.get(args.task_id)
+        if not task:
+            print(f"Task {args.task_id} does not exist")
+            return 1
+        print(json.dumps({"task_id": args.task_id, **task}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.feature_id:
+        matching = {tid: t for tid, t in tasks.items() if t.get("feature_id") == args.feature_id}
+        if not matching:
+            print(f"No tasks for feature {args.feature_id}")
+            return 1
+        print(json.dumps({"feature_id": args.feature_id, "tasks": matching}, ensure_ascii=False, indent=2))
+        return 0
+
+    print("Error: need --task-id or --feature-id")
+    return 1
+
+
+# ==================== Memory Commands ====================
+# Shared memory shared.json: writable by multiple agents concurrently.
+# Writes (memory set / memory append) serialize the load->modify->save sequence
+# with an exclusive flock on multi-agent/memory/.lock (the CLI enforces this
+# internally now, replacing the old boundary-claim convention).
+# Reads (memory get / memory list) need no lock: save_json writes are atomic
+# tmp+replace, so readers never observe a partial file.
+# Sections: common_knowledge{} configuration / task_patterns{} patterns / experiences[] / contracts[].
+
+@contextlib.contextmanager
+def _memory_lock():
+    """Exclusive flock on multi-agent/memory/.lock serializing memory writes.
+
+    Degrades to lock-free behavior with a stderr warning when flock is
+    unavailable (non-POSIX platform or locking failure) -- never crashes.
+    """
+    if fcntl is None:
+        print("Warning: fcntl unavailable on this platform; memory write proceeds without locking", file=sys.stderr)
+        yield
+        return
+    try:
+        lock_fh = MEMORY_LOCK_FILE.open("a+")  # create if missing
+    except OSError as exc:
+        print(f"Warning: cannot open memory lock file ({exc}); proceeding without locking", file=sys.stderr)
+        yield
+        return
+    try:
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        except OSError as exc:
+            print(f"Warning: flock failed ({exc}); proceeding without locking", file=sys.stderr)
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        lock_fh.close()
+
+
+def memory_get(args):
+    """Read shared memory: --key uses dotted path (e.g. common_knowledge.tech_stack); default outputs the whole file"""
+    ensure_multi_agent_dir()
+    data = load_json(MEMORY_FILE)
+    if not args.key:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    node = data
+    for part in args.key.split("."):
+        if isinstance(node, list):
+            try:
+                node = node[int(part)]
+            except (ValueError, IndexError):
+                node = None
+                break
+        elif isinstance(node, dict):
+            node = node.get(part)
+        else:
+            node = None
+        if node is None:
+            break
+    if node is None:
+        print(f"Memory path {args.key} does not exist")
+        return 1
+    print(json.dumps(node, ensure_ascii=False, indent=2) if isinstance(node, (dict, list)) else node)
+    return 0
+
+
+def memory_set(args):
+    """Write shared memory (dotted path + JSON value)"""
+    ensure_multi_agent_dir()
+    try:
+        val = json.loads(args.value)
+    except json.JSONDecodeError:
+        print("Error: --value must be valid JSON")
+        return 1
+
+    parts = args.key.split(".")
+    with _memory_lock():  # serialize load -> modify -> save across concurrent writers
+        data = load_json(MEMORY_FILE)
+        node = data
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+        node[parts[-1]] = val
+        save_json(MEMORY_FILE, data)
+    print(f"Wrote memory at {args.key}")
+    return 0
+
+
+def memory_append(args):
+    """Append to experiences/contracts array (JSON object)"""
+    ensure_multi_agent_dir()
+    try:
+        entry = json.loads(args.entry)
+    except json.JSONDecodeError:
+        print("Error: --entry must be valid JSON")
+        return 1
+
+    with _memory_lock():  # serialize load -> modify -> save across concurrent writers
+        data = load_json(MEMORY_FILE)
+        data.setdefault(args.array, []).append(entry)
+        save_json(MEMORY_FILE, data)
+    print(f"Appended to {args.array} (now {len(data[args.array])} entries)")
+    return 0
+
+
+def memory_list(args):
+    """List an overview of each shared-memory section"""
+    ensure_multi_agent_dir()
+    data = load_json(MEMORY_FILE)
+    print("=== Shared Memory ===")
+    if not data:
+        print("  (empty)")
+        return 0
+    for sec, val in data.items():
+        if isinstance(val, list):
+            n = f"{len(val)} entries"
+        elif isinstance(val, dict):
+            keys = ", ".join(val.keys()) if val else "empty"
+            n = f"{len(val)} items({keys})"
+        else:
+            n = str(val)
+        print(f"  {sec}: {n}")
+    return 0
+
+
+# ==================== Worktree Commands ====================
+# Layout: .worktrees/<task_id>/ at the project root; branch feature/<feature_id>.
+# Feature branches are LONG-LIVED: nothing in this CLI ever deletes a branch.
+# merge pre-checks with the legacy 3-arg `git merge-tree <base> <l> <r>` because
+# git 2.34 (the baseline here) has no `merge-tree --write-tree`. NOTE: the legacy
+# form exits 0 even when conflicts exist -- conflicts are only visible in the
+# output, so the clean/conflicted decision is made by parsing, not by exit code.
+
+WORKTREE_BRANCH_PREFIX = "feature/"
+_MERGE_TREE_FILE_RE = re.compile(r"^\s+(base|our|their|result)\s+(\d{6})\s+([0-9a-f]{4,})\s+(.+?)\s*$")
+
+
+def _require_git_repo(action: str) -> bool:
+    """True when cwd is inside a git repository; otherwise print an error + hint."""
+    code, _ = _run_git("rev-parse", "--git-dir")
+    if code != 0:
+        print(f"Error: {action} requires a git repository, but this is not one")
+        print("Hint: run `multi-agent init` first (it bootstraps the repository)")
+        return False
+    return True
+
+
+def _branch_exists(branch: str) -> bool:
+    code, _ = _run_git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+    return code == 0
+
+
+def _branch_checked_out_at(branch: str) -> Optional[str]:
+    """Return the worktree path where `branch` (short name) is checked out, else None.
+
+    Uses `git worktree list --porcelain` per the design (case-C detection).
+    """
+    code, out = _run_git("worktree", "list", "--porcelain")
+    if code != 0:
+        return None
+    wt_path = None
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            wt_path = line[len("worktree "):].strip()
+        elif line.startswith("branch ") and line[len("branch "):].strip() == f"refs/heads/{branch}":
+            return wt_path
+    return None
+
+
+def _worktree_status(dir_path: Path):
+    """Return (branch, dirty, n_changes) for a worktree directory."""
+    code, out = _run_git("-C", str(dir_path), "branch", "--show-current")
+    if code != 0:
+        return "(not a git worktree)", False, 0
+    branch = out.strip() or "(detached HEAD)"
+    scode, sout = _run_git("-C", str(dir_path), "status", "--porcelain")
+    n = len([l for l in sout.splitlines() if l.strip()]) if scode == 0 else 0
+    return branch, scode == 0 and n > 0, n
+
+
+def _registered_worktree_paths() -> Optional[set]:
+    """Absolute paths registered with git (`worktree list --porcelain`), or None on git failure."""
+    code, out = _run_git("worktree", "list", "--porcelain")
+    if code != 0:
+        return None
+    return {line[len("worktree "):].strip() for line in out.splitlines() if line.startswith("worktree ")}
+
+
+def _parse_merge_tree_conflicts(out: str):
+    """Parse legacy 3-arg `git merge-tree` output (git 2.34).
+
+    The legacy form exits 0 even with conflicts, so detection is parse-based.
+    Conflict conditions (verified empirically on git 2.34.1):
+      - 'changed in both' / 'added in both' with differing our/their blobs
+      - 'removed in remote' with our blob != base blob (modify/delete)
+      - 'removed in local'  with their blob != base blob (delete/modify)
+    Clean takes (e.g. one-sided edits, deletions of an untouched file, identical
+    changes on both sides) produce no section or non-conflicting entries, and are
+    not flagged. Returns (files, raw_sections) covering conflicting sections only.
+    """
+    files: List[str] = []
+    raw_sections: List[str] = []
+    state = {"section": None, "entries": {}, "names": {}, "current": None}
+
+    def close_section():
+        section = state["section"]
+        current = state["current"]
+        if section is None or current is None:
+            return
+        entries = state["entries"]
+        conflict = False
+        if section in ("changed in both", "added in both"):
+            conflict = entries.get("our") != entries.get("their")
+        elif section == "removed in remote":
+            conflict = bool(entries.get("base")) and entries.get("our") not in (None, entries.get("base"))
+        elif section == "removed in local":
+            conflict = bool(entries.get("base")) and entries.get("their") not in (None, entries.get("base"))
+        if conflict:
+            for label in ("base", "our", "their"):
+                name = state["names"].get(label)
+                if name and name not in files:
+                    files.append(name)
+            raw_sections.append("\n".join(current))
+        state["current"] = None
+
+    for line in out.splitlines():
+        stripped = line.strip()
+        # Section headers sit alone on their line; diff hunks (@@/-/+, indented or
+        # not) are section content and never count as headers.
+        is_header = bool(stripped) and not line.startswith((" ", "\t", "-", "+", "@"))
+        if is_header:
+            close_section()
+            state["section"] = stripped
+            state["entries"] = {}
+            state["names"] = {}
+            state["current"] = [line]
+            continue
+        if state["current"] is not None:
+            m = _MERGE_TREE_FILE_RE.match(line)
+            if m:
+                state["entries"][m.group(1)] = m.group(3)
+                state["names"][m.group(1)] = m.group(4).strip()
+            state["current"].append(line)
+    close_section()
+    return files, raw_sections
+
+
+def worktree_create(args):
+    """Create .worktrees/<task-id>/ on branch feature/<feature-id> (created from --base when absent)."""
+    if not _require_git_repo("worktree create"):
+        return 1
+
+    wt_dir = WORKTREES_DIR / args.task_id
+    if wt_dir.exists():
+        print(f"Error: worktree directory already exists: {wt_dir}")
+        print(f"Hint: inspect it with `worktree list`, or remove it with `worktree remove --task-id {args.task_id}`")
+        return 1
+
+    branch = WORKTREE_BRANCH_PREFIX + args.feature_id
+
+    # Case C: branch currently checked out in another worktree -> feature busy
+    busy_at = _branch_checked_out_at(branch)
+    if busy_at is not None:
+        print(f"feature busy: {branch} is checked out at {busy_at}")
+        print("Guidance: write-tasks share that existing worktree; read-only tasks may add a detached "
+              f"checkout (`git worktree add --detach <dir> {branch}`); otherwise queue until the other task completes.")
+        return 2
+
+    if _branch_exists(branch):
+        # Case B: branch exists but checked out nowhere -> attach the new worktree to it
+        code, out = _run_git("worktree", "add", str(wt_dir), branch)
+        how = f"attached existing branch {branch}"
+    else:
+        # Case A: one step -- create the branch from base and check it out in the new worktree
+        code, out = _run_git("worktree", "add", "-b", branch, str(wt_dir), args.base)
+        how = f"created branch {branch} from {args.base}"
+
+    if code != 0:
+        print(f"Error: git worktree add failed: {out}")
+        return 1
+
+    print(f"Worktree created: {wt_dir}")
+    print(f"  task:     {args.task_id}")
+    print(f"  branch:   {branch} ({how})")
+    print("Note: feature branches are long-lived; never delete the branch when done.")
+    return 0
+
+
+def worktree_list(args):
+    """List worktrees under .worktrees/ grouped by branch, plus feature branches with no active worktree.
+
+    Stale marking: a worktree whose task is terminal in the index
+    (completed/failed) but whose directory still exists gets an [stale] flag
+    — it should have been removed at T2 (`worktree remove --task-id`).
+    """
+    if not _require_git_repo("worktree list"):
+        return 1
+
+    tasks = _read_index_tasks() or {}
+    rows = []  # (branch, task_id, path, dirty, n_changes, stale)
+    if WORKTREES_DIR.is_dir():
+        registered = _registered_worktree_paths()
+        for child in sorted(WORKTREES_DIR.iterdir()):
+            if child.is_dir():
+                stale = (tasks.get(child.name) or {}).get("status") in TASK_TERMINAL_STATUSES
+                if registered is not None and str(child) not in registered and str(child.resolve()) not in registered:
+                    rows.append(("(not a git worktree)", child.name, child, False, 0, stale))
+                    continue
+                branch, dirty, n = _worktree_status(child)
+                rows.append((branch, child.name, child, dirty, n, stale))
+
+    if not rows:
+        print("No worktrees under .worktrees/")
+    else:
+        print("=== Worktrees (grouped by branch) ===")
+        for branch in sorted({r[0] for r in rows}):
+            print(f"  {branch}")
+            for br, task_id, path, dirty, n, stale in sorted(rows, key=lambda r: r[1]):
+                if br != branch:
+                    continue
+                extra = f" ({n} changed file{'s' if n != 1 else ''})" if dirty else ""
+                flag = " [stale]" if stale else ""
+                print(f"    {task_id}  {path}  [{'dirty' if dirty else 'clean'}{extra}]{flag}")
+
+    # Feature branches are long-lived; note the ones with no active worktree anywhere.
+    code, out = _run_git("branch", "--list", "feature/*", "--format=%(refname:short)")
+    if code == 0:
+        active = set()
+        c2, wout = _run_git("worktree", "list", "--porcelain")
+        if c2 == 0:
+            for line in wout.splitlines():
+                if line.startswith("branch "):
+                    ref = line[len("branch "):].strip()
+                    if ref.startswith("refs/heads/"):
+                        active.add(ref[len("refs/heads/"):])
+        orphans = [b.strip() for b in out.splitlines() if b.strip() and b.strip() not in active]
+        if orphans:
+            print("Feature branches without an active worktree (kept, not deleted):")
+            for b in orphans:
+                print(f"  {b}")
+    return 0
+
+
+def worktree_remove(args):
+    """Remove .worktrees/<task-id>/ (uncommitted changes refuse unless --force). Never touches the branch."""
+    if not _require_git_repo("worktree remove"):
+        return 1
+
+    wt_dir = WORKTREES_DIR / args.task_id
+    if not wt_dir.is_dir():
+        print(f"Error: worktree not found: {wt_dir}")
+        print("Hint: `worktree list` shows existing worktrees")
+        return 1
+
+    if not args.force:
+        code, out = _run_git("-C", str(wt_dir), "status", "--porcelain")
+        changes = [l for l in out.splitlines() if l.strip()] if code == 0 else []
+        if changes:
+            print(f"Error: worktree {wt_dir} has {len(changes)} uncommitted change(s):")
+            for line in changes[:10]:
+                print(f"  {line}")
+            print("Refusing to remove. Commit inside the worktree, or pass --force to discard them (the branch is kept either way).")
+            return 1
+
+    remove_args = ["worktree", "remove"]
+    if args.force:
+        remove_args.append("--force")
+    remove_args.append(str(wt_dir))
+    code, out = _run_git(*remove_args)
+    if code != 0:
+        print(f"Error: git worktree remove failed: {out}")
+        print("Hint: if the directory is a leftover not registered with git, remove it manually")
+        return 1
+    print(f"Removed worktree: {wt_dir}")
+    print("Branch kept (feature branches are long-lived)")
+    return 0
+
+
+def worktree_merge(args):
+    """Pre-check with legacy merge-tree, then merge feature/<feature-id> into --into (default main).
+
+    Must run from the main working tree; on conflicts nothing is merged (exit 2).
+    """
+    if not _require_git_repo("worktree merge"):
+        return 1
+
+    feature = WORKTREE_BRANCH_PREFIX + args.feature_id
+    into = args.into
+
+    # Must run from the main working tree (git-dir == git-common-dir there)
+    _, git_dir = _run_git("rev-parse", "--git-dir")
+    _, common_dir = _run_git("rev-parse", "--git-common-dir")
+    if os.path.abspath(git_dir.strip()) != os.path.abspath(common_dir.strip()):
+        print("Error: run merge from the main working tree, not from inside a worktree")
+        return 1
+
+    if not _branch_exists(feature):
+        print(f"Error: branch {feature} does not exist")
+        return 1
+    if not _branch_exists(into):
+        print(f"Error: target branch {into} does not exist")
+        return 1
+
+    # `git merge` lands on the current branch, so require the main tree to be on <into>
+    code, cur = _run_git("branch", "--show-current")
+    current = cur.strip() if code == 0 else ""
+    if current != into:
+        print(f"Error: main working tree is on branch '{current or '(detached HEAD)'}', but --into is '{into}'")
+        print(f"Hint: run `git checkout {into}` in the main working tree first")
+        return 1
+
+    # Pre-check with the legacy 3-arg form (git 2.34 has no --write-tree).
+    # Its exit code is NOT a conflict signal (it exits 0 even with conflicts);
+    # the clean/conflicted decision comes from the parsed output below.
+    code, base = _run_git("merge-base", into, feature)
+    if code != 0:
+        print(f"Error: could not compute a merge base between {into} and {feature}: {base}")
+        return 1
+    mcode, mout = _run_git("merge-tree", base.strip(), into, feature)
+    if mcode not in (0, 1):
+        print(f"Error: git merge-tree pre-check failed: {mout}")
+        return 1
+
+    files, raw_sections = _parse_merge_tree_conflicts(mout)
+    if files or raw_sections:
+        print(f"Conflicts when merging {feature} into {into}:")
+        if files:
+            for f in files:
+                print(f"  - {f}")
+        else:
+            print("  (merge-tree reported conflicts but no conflicting file sections were parsed)")
+        print()
+        for raw in raw_sections:
+            print(raw)
+            print()
+        print("conflicts found — report to user and ask how to proceed (abort / --no-commit manual resolution)")
+        return 2
+
+    # Clean -> real merge (--no-ff, merge commit message per design)
+    merge_args = ["merge", "--no-ff", feature, "-m", f"Merge {feature} into {into}"]
+    # Fresh environments may have no git identity; fall back like init's baseline commit does.
+    _, email = _run_git("config", "--get", "user.email")
+    _, name = _run_git("config", "--get", "user.name")
+    if not email.strip() or not name.strip():
+        merge_args = ["-c", "user.name=orchestrator-merge", "-c", "user.email=orchestrator@local"] + merge_args
+    code, out = _run_git(*merge_args)
+    if code != 0:
+        # Best-effort: never leave a half-merged state behind (rare: rename cases
+        # the legacy merge-tree pre-check cannot model).
+        if _run_git("rev-parse", "-q", "--verify", "MERGE_HEAD")[0] == 0:
+            _run_git("merge", "--abort")
+            print("Error: git merge failed unexpectedly; merge aborted, main working tree restored")
+        else:
+            print("Error: git merge failed (nothing was merged)")
+        print(f"  git said: {out}")
+        return 1
+    print(f"Merged {feature} into {into}")
+    print("Branch kept (feature branches are long-lived)")
+    return 0
+
+
+# ==================== Doctor Command ====================
+# Hygiene scan (WP6c-1), the successor to the retired PostToolUse hook's
+# duties. It reports and NEVER blocks: the exit code is always 0. The
+# SessionStart hook (session-init.py) probes it for its "Health" section;
+# outside a repo or without an index it prints a single marker line instead
+# of failing, so the probe degrades cleanly.
+
+# Task IDs are `{role}-{YYYYMMDD}-{seq}`; a commit author matching this on
+# main means a child committed to the main working tree (N14 violation).
+TASK_AUTHOR_RE = re.compile(r"^[a-z]+-[0-9]{8}-[0-9]+$")
+
+
+def _read_index_tasks() -> Optional[Dict[str, Any]]:
+    """Read-only index access: the flat tasks map, or None when absent.
+
+    Unlike `_load_index()` this never creates the multi-agent tree and never
+    migrates/rewrites a legacy file -- observer commands (doctor, worktree
+    list's [stale] flag) stay pure reads. A legacy `{"agents": ...}` file
+    (no "tasks" key) counts as "no index" for these purposes.
+    """
+    if not INDEX_FILE.is_file():
+        return None
+    index = load_json(INDEX_FILE)
+    tasks = index.get("tasks") if isinstance(index, dict) else None
+    return tasks if isinstance(tasks, dict) else None
+
+
+def doctor_command(args):
+    """Repo hygiene scan: (1) dirty worktrees, (2) stale worktrees via index
+    cross-read, (3) task_id-authored commits on main. Always exits 0."""
+    code, _ = _run_git("rev-parse", "--is-inside-work-tree")
+    if code != 0:
+        print("(doctor: not a repo)")
+        return 0
+    tasks = _read_index_tasks()
+    if tasks is None:
+        print("(doctor: no index)")
+        return 0
+
+    findings: List[str] = []
+
+    # (1)+(2) per .worktrees/<task-id>: dirty (uncommitted changes) and stale
+    # (dir still present while the index says the task is terminal).
+    if WORKTREES_DIR.is_dir():
+        for child in sorted(WORKTREES_DIR.iterdir()):
+            if not child.is_dir():
+                continue
+            tid = child.name
+            scode, sout = _run_git("-C", str(child), "status", "--porcelain")
+            changes = [l for l in sout.splitlines() if l.strip()] if scode == 0 else []
+            if changes:
+                paths = ", ".join(l[3:].split(" -> ")[-1] for l in changes[:3])
+                findings.append(f"dirty: {tid} ({len(changes)} changes: {paths})")
+            if (tasks.get(tid) or {}).get("status") in TASK_TERMINAL_STATUSES:
+                findings.append(f"stale: {tid} (run: worktree remove --task-id {tid})")
+
+    # (3) task_id-authored commits on main -- last ~30, only checked while on main.
+    bcode, bout = _run_git("branch", "--show-current")
+    if bcode == 0 and bout.strip() == "main":
+        lcode, lout = _run_git("log", "-n", "30", "--format=%an%x00%h")
+        if lcode == 0:
+            for line in lout.splitlines():
+                author, sep, short = line.partition("\x00")
+                if sep and TASK_AUTHOR_RE.match(author.strip()):
+                    findings.append(f"main-violation: {author.strip()} {short.strip()}")
+
+    if findings:
+        for finding in findings:
+            print(finding)
+    else:
+        print("doctor: all clear")
+    return 0
+
+
+# ==================== Init Command ====================
+
+def init_command(args):
+    """Initialize the multi-agent directory structure (+ git bootstrap when absent)"""
+    ensure_multi_agent_dir()
+    ensure_git_repo()
+    print(f"Initialized: {MULTI_AGENT_DIR}")
+    print(f"  - {INDEX_FILE}")
+    print(f"  - {MEMORY_FILE}")
+    print(f"  - {MULTI_AGENT_DIR / 'comm'}")
+    return 0
+
+
+# ==================== Main ====================
+
+def main():
+    parser = argparse.ArgumentParser(description="Orch-lite CLI")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # init
+    subparsers.add_parser("init", help="Initialize the multi-agent directory structure")
+
+    # index
+    index_parser = subparsers.add_parser("index", help="Index document operations (Main Agent exclusive write)")
+    index_sub = index_parser.add_subparsers(dest="index_cmd", required=True)
+
+    # index create (T1 assign time point)
+    create_idx = index_sub.add_parser("create", help="T1 assign time point: create a task entry (flat task map)")
+    create_idx.add_argument("--task-id", required=True, help="Task ID (sole primary key, e.g. impl-20260911-01)")
+    create_idx.add_argument("--role", required=True, help="Functional role short name (test/research/impl/review)")
+    create_idx.add_argument("--feature-id", help="Feature this task belongs to (branch feature/<feature-id>)")
+    create_idx.add_argument("--objective", help="Task objective")
+    create_idx.add_argument("--criteria", nargs="*", help="Acceptance criteria (multiple allowed)")
+
+    # index update (T2 status-update time point)
+    update_idx = index_sub.add_parser("update", help="T2 status-update time point: update task status/products")
+    update_idx.add_argument("--task-id", required=True, help="Task ID")
+    update_idx.add_argument("--status", choices=["assigned", "running", "completed", "failed"], help="Task status")
+    update_idx.add_argument("--output", help="Output summary")
+    update_idx.add_argument("--products", nargs="*", help="Product paths (multiple allowed)")
+
+    # index list (flat task list)
+    index_sub.add_parser("list", help="Flat task list (task_id | role | feature_id | status)")
+
+    # index show (task detail, or all tasks of a feature -- powers the reuse check)
+    show_idx = index_sub.add_parser("show", help="Show a task's detail (--task-id) or all tasks of a feature (--feature-id)")
+    show_idx.add_argument("--task-id", help="Task ID")
+    show_idx.add_argument("--feature-id", help="Feature ID (lists all its tasks)")
+
+    # memory
+    memory_parser = subparsers.add_parser("memory", help="Shared memory file operations")
+    memory_sub = memory_parser.add_subparsers(dest="memory_cmd")
+
+    memory_sub.add_parser("list", help="List overview of each shared-memory section")
+
+    get_m = memory_sub.add_parser("get", help="Read memory (dotted path; defaults to whole file)")
+    get_m.add_argument("--key", help="Dotted path, e.g. common_knowledge.tech_stack")
+
+    set_m = memory_sub.add_parser("set", help="Write memory (dotted path + JSON value)")
+    set_m.add_argument("--key", required=True, help="Dotted path, e.g. common_knowledge.tech_stack")
+    set_m.add_argument("--value", required=True, help="JSON value")
+
+    append_m = memory_sub.add_parser("append", help="Append to experiences/contracts array")
+    append_m.add_argument("--array", required=True, choices=["experiences", "contracts"], help="Target array section")
+    append_m.add_argument("--entry", required=True, help="JSON object to append")
+
+    # worktree
+    worktree_parser = subparsers.add_parser(
+        "worktree",
+        help="Git worktree operations (.worktrees/<task-id>, branch feature/<feature-id>; branches are long-lived)")
+    worktree_sub = worktree_parser.add_subparsers(dest="worktree_cmd", required=True)
+
+    create_wt = worktree_sub.add_parser("create", help="Create .worktrees/<task-id>/ on branch feature/<feature-id>")
+    create_wt.add_argument("--task-id", required=True, help="Task ID (worktree directory name; also the git commit author)")
+    create_wt.add_argument("--feature-id", required=True, help="Feature ID -> branch feature/<feature-id>")
+    create_wt.add_argument("--base", default="main", help="Base ref when the branch must be created (default: main)")
+
+    worktree_sub.add_parser("list", help="List worktrees under .worktrees/, grouped by feature branch ([stale] via index cross-read)")
+
+    remove_wt = worktree_sub.add_parser("remove", help="Remove a worktree (never deletes the branch)")
+    remove_wt.add_argument("--task-id", required=True, help="Task ID (worktree directory name)")
+    remove_wt.add_argument("--force", action="store_true", help="Discard uncommitted changes and remove anyway")
+
+    merge_wt = worktree_sub.add_parser("merge", help="Pre-check with merge-tree, then merge feature/<feature-id> into --into")
+    merge_wt.add_argument("--feature-id", required=True, help="Feature ID -> branch feature/<feature-id>")
+    merge_wt.add_argument("--into", default="main", help="Target branch (default: main)")
+
+    # doctor
+    subparsers.add_parser("doctor", help="Hygiene scan: dirty worktrees, stale worktrees (index cross-read), task_id-authored commits on main (always exits 0)")
+
+    args = parser.parse_args()
+
+    # routing
+    if args.command == "init":
+        return init_command(args)
+    elif args.command == "index":
+        if args.index_cmd == "list":
+            return index_list(args)
+        elif args.index_cmd == "create":
+            return index_create(args)
+        elif args.index_cmd == "update":
+            return index_update(args)
+        elif args.index_cmd == "show":
+            return index_show(args)
+    elif args.command == "memory":
+        if args.memory_cmd == "list":
+            return memory_list(args)
+        elif args.memory_cmd == "get":
+            return memory_get(args)
+        elif args.memory_cmd == "set":
+            return memory_set(args)
+        elif args.memory_cmd == "append":
+            return memory_append(args)
+    elif args.command == "worktree":
+        if args.worktree_cmd == "create":
+            return worktree_create(args)
+        elif args.worktree_cmd == "list":
+            return worktree_list(args)
+        elif args.worktree_cmd == "remove":
+            return worktree_remove(args)
+        elif args.worktree_cmd == "merge":
+            return worktree_merge(args)
+    elif args.command == "doctor":
+        return doctor_command(args)
+
+    parser.print_help()
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
