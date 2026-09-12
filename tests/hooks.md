@@ -91,26 +91,29 @@ No PostToolUse hook is registered anymore; only SessionStart
 
 ## Hook 3: `session-init.py` — SessionStart, v3: bootstrap + index + doctor probe + verbatim contracts
 
-The v3 hook assembles one `{"additionalContext": ...}` payload with five
-sections:
+The v3 hook assembles one `{"additionalContext": ...}` payload with six
+sections — attention-critical contracts first, runtime state last:
 
-1. **Bootstrap** — idempotent `multi-agent init` (creates what's missing,
+1. **5 Invariants (memorize)** — the "## 5 Invariants (memorize)" section
+   extracted verbatim from SKILL.md (the behavioral iron rules, seen before
+   any routing/dispatch guidance);
+2. **Request Routing** — the "## Request Routing" section extracted verbatim
+   from SKILL.md;
+3. **Dispatch Package (MUST template)** — the "## Dispatch Package (MUST
+   template)" section extracted verbatim from SKILL.md;
+4. **Bootstrap** — idempotent `multi-agent init` (creates what's missing,
    overwrites nothing; also bootstraps git in a repo-less project);
-2. **Agent Index** — `multi-agent index list` (flat task list), so principle
+5. **Agent Index** — `multi-agent index list` (flat task list), so principle
    3 ("recover minimal state") is automatic;
-3. **Health** — a probe of `multi-agent doctor`, captured but *tolerated for
+6. **Health** — a probe of `multi-agent doctor`, captured but *tolerated for
    absence*: non-zero exit, empty output, or argparse "invalid choice" /
    "unrecognized" text → the section is skipped silently (the hook stays
    usable against CLI copies that predate doctor). When doctor exists, its
    findings (`dirty:` / `stale:` / `main-violation:` lines, or
-   `doctor: all clear`) appear verbatim;
-4. **Request Routing** — the "## Request Routing" section extracted verbatim
-   from SKILL.md;
-5. **Dispatch Package (MUST template)** — the "## Dispatch Package (MUST
-   template)" section extracted verbatim from SKILL.md.
+   `doctor: all clear`) appear verbatim.
 
-Both contract sections come from SKILL.md only (single source of truth — the
-hook holds no second copy; the extraction table in the hook just names
+The three contract sections come from SKILL.md only (single source of truth —
+the hook holds no second copy; the extraction table in the hook just names
 heading prefixes and labels). Iron-rule marker tags inside these sections
 (`<EXTREMELY-IMPORTANT>` blocks) ride along verbatim — the injection shape
 itself is unchanged.
@@ -125,7 +128,7 @@ line with exit 0 — the hook never crashes the session.
 | 3.2 | project with a populated index / existing `multi-agent/` | re-runs init idempotently (no overwrite), shows the flat task list, injects the Request Routing section, Health reflects doctor (e.g. stale/dirty findings) | ✅ |
 | 3.3 | SKILL.md without a "## Request Routing" section | graceful fallback line "(contract section missing in SKILL.md)" in additionalContext for that section, no crash (exit 0), init + index + Health still work | ✅ |
 | 3.4 | CLI copy predating the doctor subcommand | Health skipped silently (graceful-absence probe), the other sections intact, exit 0 | ✅ |
-| 3.5 | SKILL.md with both contract sections (current shape) | additionalContext contains both "--- Request Routing (from SKILL.md) ---" and "--- Dispatch Package (MUST template) (from SKILL.md) ---", each section byte-identical to the SKILL.md text (verified programmatically: `extract_contract` output vs the slice between headings) | ✅ |
+| 3.5 | SKILL.md with all three contract sections (current shape) | additionalContext contains "--- 5 Invariants (memorize) (from SKILL.md) ---", "--- Request Routing (from SKILL.md) ---" and "--- Dispatch Package (MUST template) (from SKILL.md) ---", each section byte-identical to the SKILL.md text (verified programmatically: `extract_contract` output vs the slice between headings) | ✅ |
 | 3.6 | SKILL.md without the "## Dispatch Package (MUST template)" section | fallback line for that section only, no crash, exit 0 | ✅ |
 | 3.7 | session cwd unwritable (chmod 555 dir; e.g. a root-owned 755 project) | hook exits 0; Bootstrap + Agent Index render `--- <Section> (skipped: cannot create <path>: Permission denied) ---`; the words `Traceback`, `File "`, `PermissionError` never appear in the payload; contract sections still inject; nothing created in the cwd | ✅ |
 | 3.8 | same unwritable cwd, raw CLI calls | `doctor` → `(doctor: not a repo)`, exit 0; `index list` → one `bootstrap skipped: cannot create ...` line, exit 0; explicit `init` → same line, clean non-zero; no traceback on any channel | ✅ |

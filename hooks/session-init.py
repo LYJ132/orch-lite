@@ -7,14 +7,17 @@ own location (`__file__`) — zero hardcoded absolute paths. On session start:
 1. Consume the stdin event JSON (best-effort; its content is not needed).
 2. Idempotently run `<skill>/scripts/multi-agent init` (the CLI only creates
    files that don't exist; it never overwrites).
-3. Run `multi-agent index list` and inject the agent index.
-4. Probe `multi-agent doctor` and inject its output as "Health". A non-zero
-   exit with argparse-style "invalid choice"/"unrecognized" output means the
-   subcommand is absent and the section is skipped silently; an empty output
-   is likewise skipped.
-5. Extract the "## Request Routing" and "## Dispatch Package (MUST template)"
-   sections verbatim from SKILL.md (single source of truth; the hook holds no
-   second copy of the contracts) and inject each as its own labeled part.
+3. Run `multi-agent index list` and probe `multi-agent doctor` (Health). A
+   non-zero doctor exit with argparse-style "invalid choice"/"unrecognized"
+   output means the subcommand is absent and the section is skipped silently;
+   an empty output is likewise skipped.
+4. Extract the "## 5 Invariants (memorize)", "## Request Routing" and
+   "## Dispatch Package (MUST template)" sections verbatim from SKILL.md
+   (single source of truth; the hook holds no second copy of the contracts)
+   and inject each as its own labeled part.
+5. Assemble the payload attention-first: the three SKILL.md contract sections
+   open it (iron rules before routing before dispatch), the runtime state
+   sections (Bootstrap, Agent Index, Health) close it.
 
 Fail-soft rendering: a CLI-derived section whose CLI call fails (non-zero
 exit, a "bootstrap skipped: ..." line, or traceback-shaped output — e.g. the
@@ -69,8 +72,12 @@ SKILL_MD = next(
 
 # Sections injected verbatim from SKILL.md: (heading prefix, label). Each runs
 # from its heading to the next '---' or '## ' heading. SKILL.md is the single
-# source of truth — the hook holds no second copy.
+# source of truth — the hook holds no second copy. Tuple order is injection
+# order: the iron rules come first so they are read before the routing and
+# dispatch sections. Contract sections as a block precede the runtime state
+# sections (Bootstrap / Agent Index / Health), which render last.
 CONTRACT_SECTIONS = (
+    ("## 5 Invariants (memorize)", "5 Invariants (memorize)"),
     ("## Request Routing", "Request Routing"),
     ("## Dispatch Package (MUST template)", "Dispatch Package (MUST template)"),
 )
@@ -220,20 +227,27 @@ def contract_sections() -> List[Tuple[str, str]]:
 
 
 def build_context() -> str:
-    """Assemble the single additionalContext payload (compact)."""
+    """Assemble the single additionalContext payload (compact).
+
+    Attention-critical content first: the SKILL.md contract sections (iron
+    rules, routing, dispatch) open the payload; the runtime state sections
+    (Bootstrap, Agent Index, Health) close it.
+    """
     code, init_out = run_cli(["init"])
     index_code, index_out = run_cli(["index", "list"])
 
-    parts = [
-        "[orch-lite]",
-        _render_cli("Bootstrap", ["init"], "(no output)", code, init_out),
-        _render_cli("Agent Index", ["index", "list"], "(empty)", index_code, index_out),
-    ]
+    parts = ["[orch-lite]"]
+    for label, section in contract_sections():
+        parts.append(f"--- {label} (from SKILL.md) ---\n{section}")
+    parts.append(
+        _render_cli("Bootstrap", ["init"], "(no output)", code, init_out)
+    )
+    parts.append(
+        _render_cli("Agent Index", ["index", "list"], "(empty)", index_code, index_out)
+    )
     health = health_section()
     if health:
         parts.append(health)
-    for label, section in contract_sections():
-        parts.append(f"--- {label} (from SKILL.md) ---\n{section}")
     return "\n\n".join(parts)
 
 
