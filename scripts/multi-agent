@@ -26,7 +26,9 @@ Commands:
     worktree remove       Remove a worktree (never deletes the branch)
     worktree merge        Pre-check with merge-tree, then merge feature/<feature-id> into a branch
     doctor                Hygiene scan: dirty worktrees, stale worktrees (index cross-read),
-                          task_id-authored commits on main (always exits 0)
+                          task_id-authored commits on main, HEAD-vs-copy install drift
+                          (--compare-dir DIR, default ~/.agents/skills/orch-lite);
+                          always exits 0
     init                  Initialize the multi-agent directory structure (+ git bootstrap when absent)
 """
 
@@ -36,6 +38,7 @@ import re
 import json
 import argparse
 import contextlib
+import hashlib
 import subprocess
 from pathlib import Path
 from datetime import datetime
@@ -791,6 +794,116 @@ def worktree_merge(args):
 # main means a child committed to the main working tree (N14 violation).
 TASK_AUTHOR_RE = re.compile(r"^[a-z]+-[0-9]{8}-[0-9]+$")
 
+# (4) Dual-install drift. The skill source is deployed to several installs
+# (SKILL.md "Deployment rules"), and a copy left behind silently changes
+# runtime behaviour, so doctor diffs the repo's HEAD *tracked* sources against
+# the user-scoped copy at ~/.agents/skills/orch-lite.
+#   - the HEAD side is read from git (`ls-tree`), never the working tree, so
+#     uncommitted edits and stray files here are not reported as drift;
+#   - the copy side is hashed the same way git hashes a blob (sha1 of
+#     "blob <size>\0content"), so both sides are directly comparable;
+#   - an absent copy means "this machine carries only the git repo" -> lenient,
+#     no findings and no error.
+# The compared set is the skill's own top-level source roots.
+DRIFT_SOURCE_ROOTS = ("SKILL.md", ".gitignore", "hooks", "references", "scripts", "tests")
+# A repo is only comparable when HEAD looks like the skill source; otherwise an
+# unrelated orchestrated project would report every copy file as "extra".
+DRIFT_REPO_MARKERS = ("SKILL.md", "scripts/multi-agent")
+DEFAULT_COMPARE_DIR = os.path.join(os.path.expanduser("~"), ".agents", "skills", "orch-lite")
+# One `git ls-tree -r <rev> -z` record: `--format` is unavailable on the git 2.34
+# baseline here, and -z (instead of the default format) keeps paths raw rather
+# than C-quoted, so they line up with the names os.walk reports.
+_LS_TREE_RE = re.compile(r"^[0-7]{6} blob ([0-9a-f]{40})\t(.+)$")
+# Copy-side noise that is never part of the source set.
+_DRIFT_IGNORED_DIRS = frozenset({"__pycache__", ".git"})
+# Distinguishes "absent from the copy" from "present but unreadable" (None hash).
+_ABSENT = object()
+
+
+def _blob_sha(path: Path) -> Optional[str]:
+    """Git-style blob hash of a file's bytes, or None when it cannot be read."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    digest = hashlib.sha1()
+    digest.update(b"blob %d\0" % len(data))
+    digest.update(data)
+    return digest.hexdigest()
+
+
+def _head_tracked_blobs() -> Optional[Dict[str, str]]:
+    """{path: blob sha} for HEAD's DRIFT_SOURCE_ROOTS, or None when HEAD is unusable."""
+    try:
+        code, out = _run_git("ls-tree", "-r", "-z", "HEAD", "--", *DRIFT_SOURCE_ROOTS)
+    except ValueError:
+        # Tracked path bytes that are not valid UTF-8: degrade to "no comparison"
+        # rather than crash the scan (doctor's never-raises contract).
+        return None
+    if code != 0:
+        return None
+    blobs: Dict[str, str] = {}
+    for record in out.split("\0"):
+        match = _LS_TREE_RE.match(record)
+        if match:
+            blobs[match.group(2)] = match.group(1)
+    return blobs
+
+
+def _copy_blobs(compare_dir: Path) -> Dict[str, Optional[str]]:
+    """{relative path: blob sha} for DRIFT_SOURCE_ROOTS inside the comparison copy.
+
+    A None value means the file exists but could not be read; paths absent from
+    the copy are simply not keys (callers use _ABSENT to tell the two apart).
+    """
+    blobs: Dict[str, Optional[str]] = {}
+    for root in DRIFT_SOURCE_ROOTS:
+        top = compare_dir / root
+        if top.is_file():
+            blobs[root] = _blob_sha(top)
+            continue
+        if not top.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(top):
+            dirnames[:] = sorted(d for d in dirnames if d not in _DRIFT_IGNORED_DIRS)
+            # Relative to `top`, so a relative --compare-dir (including ".") and
+            # symlinked roots both yield repo-relative source paths.
+            sub = Path(dirpath).relative_to(top).parts
+            for name in sorted(filenames):
+                if name.endswith(".pyc"):
+                    continue
+                rel = "/".join((root, *sub, name))
+                blobs[rel] = _blob_sha(Path(dirpath) / name)
+    return blobs
+
+
+def _doctor_drift_findings(compare_dir: Path) -> List[str]:
+    """(4) Drift between HEAD's tracked skill sources and the comparison copy.
+
+    No findings (and no error) when the copy is absent or is not a directory,
+    when HEAD is unusable, or when HEAD does not look like the skill source;
+    when the two installs agree the output is likewise nothing at all.
+    """
+    if not compare_dir.is_dir():
+        return []
+    head = _head_tracked_blobs()
+    if not head or not all(marker in head for marker in DRIFT_REPO_MARKERS):
+        return []
+    in_copy = _copy_blobs(compare_dir)
+
+    findings: List[str] = []
+    for path in sorted(set(head) | set(in_copy)):
+        head_sha, copy_sha = head.get(path), in_copy.get(path, _ABSENT)
+        if copy_sha is _ABSENT:
+            findings.append(f"drift: {path} (tracked in HEAD, missing in copy)")
+        elif head_sha is None:
+            findings.append(f"drift: {path} (present in copy, not tracked in HEAD)")
+        elif copy_sha is None:
+            findings.append(f"drift: {path} (present in copy but unreadable)")
+        elif copy_sha != head_sha:
+            findings.append(f"drift: {path} (HEAD {head_sha[:12]} != copy {copy_sha[:12]})")
+    return findings
+
 
 def _read_index_tasks() -> Optional[Dict[str, Any]]:
     """Read-only index access: the flat tasks map, or None when absent.
@@ -809,7 +922,8 @@ def _read_index_tasks() -> Optional[Dict[str, Any]]:
 
 def doctor_command(args):
     """Repo hygiene scan: (1) dirty worktrees, (2) stale worktrees via index
-    cross-read, (3) task_id-authored commits on main. Always exits 0."""
+    cross-read, (3) task_id-authored commits on main, (4) HEAD-vs-copy install
+    drift (--compare-dir, default ~/.agents/skills/orch-lite). Always exits 0."""
     code, _ = _run_git("rev-parse", "--is-inside-work-tree")
     if code != 0:
         print("(doctor: not a repo)")
@@ -845,6 +959,10 @@ def doctor_command(args):
                 author, sep, short = line.partition("\x00")
                 if sep and TASK_AUTHOR_RE.match(author.strip()):
                     findings.append(f"main-violation: {author.strip()} {short.strip()}")
+
+    # (4) HEAD-vs-copy install drift (independent of the checks above: a separate
+    # finding family, skipped silently when the copy is not there).
+    findings.extend(_doctor_drift_findings(Path(args.compare_dir).expanduser()))
 
     if findings:
         for finding in findings:
@@ -942,7 +1060,14 @@ def main():
     merge_wt.add_argument("--into", default="main", help="Target branch (default: main)")
 
     # doctor
-    subparsers.add_parser("doctor", help="Hygiene scan: dirty worktrees, stale worktrees (index cross-read), task_id-authored commits on main (always exits 0)")
+    doctor_p = subparsers.add_parser(
+        "doctor",
+        help="Hygiene scan: dirty worktrees, stale worktrees (index cross-read), task_id-authored "
+             "commits on main, HEAD-vs-copy install drift (always exits 0)")
+    doctor_p.add_argument(
+        "--compare-dir", default=DEFAULT_COMPARE_DIR,
+        help="Check (4): install to compare HEAD's tracked sources against "
+             "(default: ~/.agents/skills/orch-lite; no finding when it does not exist)")
 
     args = parser.parse_args()
 

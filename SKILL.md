@@ -134,7 +134,7 @@ Every dispatch prompt has exactly four parts, in order:
 | `worktree remove --task-id [--force]` | Main, T2: remove (refuses if uncommitted); branch untouched |
 | `worktree merge --feature-id [--into main]` | Main: integrate (merge-tree pre-check) |
 | `memory list/get/set/append` | shared memory (CLI takes internal flock during set/append) |
-| `doctor` | hygiene scan (dirty/stale worktrees, commits on main); always exits 0 |
+| `doctor [--compare-dir DIR]` | hygiene scan (dirty/stale worktrees, commits on main, HEAD-vs-copy install drift vs `~/.agents/skills/orch-lite`); always exits 0 |
 
 Full params in [03-state.md](references/03-state.md).
 
@@ -176,5 +176,5 @@ Process documents (changelog, open questions P1–P8, design decisions) live **o
 
 1. **Copy/sync preserves exec bits and LF.** A `-rw-r--r--` script or a CRLF shebang (`env: 'python3\r'`) kills every hook with no visible error. Self-check after any sync: `ls -l hooks/ scripts/` (all must show `x`) and `grep -r $'\r' hooks/ scripts/` (must be empty).
 2. **`~/.zcode/cli/config.json` hook paths are absolute** — renaming the skill directory requires updating them.
-4. **`~/.zcode/skills/orch-lite/` is the primary editing target** — it is the copy wired to the registered hooks. After each change-set, propagate to `~/.agents/skills/orch-lite/`, `/home/linyujian/PROGRAMS/.agents/skills/orch-lite/`, and the plugin source `/home/linyujian/PROGRAMS/orch-lite/plugins/orch-lite/` (its `SKILL.md` lives at `skills/orch-lite/SKILL.md` inside the plugin), preserving exec bits and LF.
+4. **`~/.zcode/skills/orch-lite/` is the primary editing target** — it is the copy wired to the registered hooks. After each change-set, propagate to `~/.agents/skills/orch-lite/`, `/home/linyujian/PROGRAMS/.agents/skills/orch-lite/`, and the plugin source `/home/linyujian/PROGRAMS/orch-lite/plugins/orch-lite/` (its `SKILL.md` lives at `skills/orch-lite/SKILL.md` inside the plugin), preserving exec bits and LF. Verify a propagation with `python3 scripts/multi-agent doctor` (default target `~/.agents/skills/orch-lite`; `--compare-dir DIR` points it at another install): check (4) compares HEAD's tracked sources (`SKILL.md`, `.gitignore`, `hooks/`, `references/`, `scripts/`, `tests/`) by blob hash against that copy and prints one `drift: <path> …` line per differing / one-side-missing file — nothing means the two installs agree (or the copy is absent).
 5. **Hooks are snapshotted at session start** — config/permission fixes only take effect in a NEW session; already-open sessions keep running the old (possibly dead) snapshot.
