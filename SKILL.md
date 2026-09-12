@@ -1,6 +1,6 @@
 ---
 name: orch-lite
-description: Lightweight multi-agent orchestration skill. Routing: pure conversation (including reading files to answer) → main agent directly; any file operation/modification → dispatch to a child agent with run_in_background=true; unsure → ask the user. Core goals: the user is never blocked by tasks, the main agent only coordinates, a three-layer agent limit, homogeneous tasks split downward / heterogeneous tasks coordinate laterally, minimal state recovery. Dispatches are non-blocking (Agent tool with run_in_background=true): after dispatching a child, the main session returns to the user immediately and waits for the user's next request — the child keeps running in the background; if it finished by then the main session picks up its result, if not they proceed in parallel. Do not pre-add complex exception handling; add rules only when real problems arise.
+description: "Lightweight multi-agent orchestration skill. Routes every request into one of three states - chat, single background dispatch, or index+worktree orchestration - so the main agent only coordinates while all file-modifying work runs in background child agents. Use when a request involves writing or modifying files, git/build operations, or coordinating multiple child agents."
 ---
 
 # Orch-lite
