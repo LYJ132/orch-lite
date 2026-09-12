@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Extensionless on purpose: this is an executable CLI invoked as `scripts/multi-agent`,
+# not an importable module -- keep the 100755 exec bit (see .gitattributes: sync tools
+# have stripped it, plus rewritten CRLF, and killed every hook).
 """
 Orch-lite CLI Tool
 

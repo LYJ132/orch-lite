@@ -5,6 +5,10 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 # Orch-lite
 
+<SUBAGENT-STOP>
+**Audience gate — the routing protocol below targets the MAIN agent only.** If you are a dispatched child executor, stop here: do not re-route, do not dispatch or derive further agents (six-rule block rule 1), do not touch `main` — do the work in the workspace named for you and report.
+</SUBAGENT-STOP>
+
 **Runtime entry point.** Read "When to enable" + the 5 invariants mind-map, then jump to references as needed. Process/history docs live outside the skill (`PROGRAMS/docs/lo-meta/`).
 
 ---

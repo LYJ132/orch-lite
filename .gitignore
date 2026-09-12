@@ -1,2 +1,5 @@
+# Source-vs-runtime boundary: this repo carries skill source only.
+# `multi-agent/` is live CLI state of whichever project the skill runs in, `.worktrees/`
+# are child write areas destroyed at T2 — tracking either ships one machine's runtime as source.
 multi-agent/
 .worktrees/

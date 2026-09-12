@@ -1,5 +1,8 @@
 # Normalize line endings to LF so the hooks and CLI stay runnable everywhere
 # (Windows checkouts otherwise get CRLF, which breaks `#!/usr/bin/env python3`).
+# Why this file exists: the project has been burned three times by copy/sync tools that
+# rewrote LF→CRLF and silently stripped the 100755 exec bit, killing every hook with no
+# visible error. eol=lf pins the endings; re-check `ls -l` after any sync.
 *.py text eol=lf
 *.sh text eol=lf
 *.md text eol=lf
