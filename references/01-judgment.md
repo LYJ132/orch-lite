@@ -1,6 +1,6 @@
 # Judgment & Architecture (principles · roles · naming · hierarchy)
 
-> The single store of judgment rules — read before ANY decision. Premises: agents are **ephemeral executors** (fresh session per dispatch; all state lives in files; `task_id` is the sole primary key — there is no persistent agent identity, N8 retired). Isolation is **by construction** via per-task worktrees (one writable worktree per feature branch), so the old `boundary`/`instance_id` machinery is fully retired.
+> The single store of judgment rules — read before ANY decision. Premises: agents are **ephemeral executors** (fresh session per dispatch; all state lives in files; `task_id` is the sole primary key — there is no persistent agent identity, N8 retired). Isolation is **by construction** via per-task worktrees (one writable worktree per feature branch).
 
 ---
 
@@ -40,7 +40,6 @@ The index provides only: task status + usable products. It is not for real-time 
 - Whether a worktree is used at all is decided **lazily, per §1.11** (only when another child is still `running` at dispatch)
 - One long-lived branch per feature: `feature/<feature_id>`; merge is integration, not closure; never auto-deleted
 - Concurrent same-file edits cannot collide by construction: each executor writes only in its own write area (worktree, or — when solo — the working tree checked out on its feature branch), never on main
-- The old two-time-point boundary writes are retired.
 
 ### 1.11 Isolation Is Gated on Observed Concurrency (Lazy)
 Isolate only when concurrency is real. At dispatch, the main agent reads the index's live-task set (any other child still `running`?):
@@ -48,7 +47,7 @@ Isolate only when concurrency is real. At dispatch, the main agent reads the ind
 - **One+ running** → concurrency is real → create a worktree for the newcomer so its writes cannot collide.
 
 Routing default (Step 0's decomposition check): for independent work — ≥2 work items with disjoint file sets and no output dependency (one consumes the other's result) — parallel dispatch via one branch each is the default; serializing them is legitimate only for a NAMED dependency or a shared-file constraint, and an awaiting-user-review gate is not a dependency (implement on the branch; the integration merge is the review point). A parallel batch is itself concurrency, so this section's gate applies unchanged: the first-dispatched child takes the primary tree on its branch, every later child gets a worktree.
-This is a "blunt" gate: it cannot see *which file* another child is writing, so concurrent-but-disjoint tasks are still worktreed. That over-isolation is one cheap `git worktree add`; the alternative (a per-file occupancy table that lets us know exactly who holds which file) is precisely the `files`/`git` occupancy tracking we retired — not worth the lifecycle cost. Zero new mechanism, `boundaries.json` stays retired.
+This is a "blunt" gate: it cannot see *which file* another child is writing, so concurrent-but-disjoint tasks are still worktreed. That over-isolation is one cheap `git worktree add`; the alternative (a per-file occupancy table that lets us know exactly who holds which file) is precisely the `files`/`git` occupancy tracking we retired — not worth the lifecycle cost. Zero new mechanism.
 
 ### 1.12 Shared Resources Are Protected by Mechanisms, Not Memory
 - Shared-memory writes are serialized by a flock the CLI takes internally on `multi-agent/memory/.lock`; agents just call the CLI
@@ -112,7 +111,7 @@ Level 0: Main agent
 - **Workspace (N19)**: workers get NO worktree of their own — they work inside the **parent's worktree** (`.worktrees/<parent_task_id>/`)
 - **Execution**: each operates only its disjoint shard and **never commits** — the parent is the sole committer
 - **Products**: write to `artifacts/{task_id}/worker-{i}/`; the parent collects/merges, registers under `index update` products
-- **Session end**: auto-ended by the platform; nothing to clean up (no worktree, no boundary records)
+- **Session end**: auto-ended by the platform; nothing to clean up (no worktree)
 - **Failure**: worker returns success/failure+reason; parent retries ≤1 time, then marks the task failed and escalates to main
 - **Concurrency shortcut**: if a single command parallelizes (e.g. `pytest -n auto`), do NOT derive workers.
 
