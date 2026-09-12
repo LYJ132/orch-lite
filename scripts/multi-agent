@@ -928,6 +928,12 @@ TASK_AUTHOR_RE = re.compile(r"^[a-z]+-[0-9]{8}-[0-9]+$")
 #     no findings and no error.
 # The compared set is the skill's own top-level source roots.
 DRIFT_SOURCE_ROOTS = ("SKILL.md", ".gitignore", "hooks", "references", "scripts", "tests")
+# Plugin layout (Phase 1): SKILL.md moves to skills/orch-lite/SKILL.md while the
+# other source roots stay put, so HEAD (and a plugin-form copy) may carry the
+# skill either way. Both comparison sides are normalized to the SKILL.md ROLE
+# (flat name) below, which makes a flat copy vs a plugin HEAD -- or the reverse
+# -- match by role instead of reporting every path missing/extra.
+DRIFT_PLUGIN_SKILL_MD = "skills/orch-lite/SKILL.md"
 # A repo is only comparable when HEAD looks like the skill source; otherwise an
 # unrelated orchestrated project would report every copy file as "extra".
 DRIFT_REPO_MARKERS = ("SKILL.md", "scripts/multi-agent")
@@ -954,10 +960,30 @@ def _blob_sha(path: Path) -> Optional[str]:
     return digest.hexdigest()
 
 
+def _normalize_skill_md_role(blobs: Dict[str, Any]) -> Dict[str, Any]:
+    """Collapse the SKILL.md role across layouts, in place.
+
+    skills/orch-lite/SKILL.md (plugin) and SKILL.md (flat) are the same file
+    role, so the drift comparison matches them across installs. When a tree
+    somehow carries both, the flat entry wins.
+    """
+    plugin = blobs.pop(DRIFT_PLUGIN_SKILL_MD, _ABSENT)
+    if plugin is not _ABSENT and "SKILL.md" not in blobs:
+        blobs["SKILL.md"] = plugin
+    return blobs
+
+
 def _head_tracked_blobs() -> Optional[Dict[str, str]]:
-    """{path: blob sha} for HEAD's DRIFT_SOURCE_ROOTS, or None when HEAD is unusable."""
+    """{path: blob sha} for HEAD's tracked skill sources, or None when HEAD is unusable.
+
+    Pathspecs cover the flat roots plus the plugin SKILL.md location (a no-op
+    pathspec under the flat layout), then normalize to role keys so the
+    DRIFT_REPO_MARKERS gate and the comparison below are layout-agnostic.
+    """
     try:
-        code, out = _run_git("ls-tree", "-r", "-z", "HEAD", "--", *DRIFT_SOURCE_ROOTS)
+        code, out = _run_git(
+            "ls-tree", "-r", "-z", "HEAD", "--", *DRIFT_SOURCE_ROOTS, DRIFT_PLUGIN_SKILL_MD
+        )
     except ValueError:
         # Tracked path bytes that are not valid UTF-8: degrade to "no comparison"
         # rather than crash the scan (doctor's never-raises contract).
@@ -969,14 +995,16 @@ def _head_tracked_blobs() -> Optional[Dict[str, str]]:
         match = _LS_TREE_RE.match(record)
         if match:
             blobs[match.group(2)] = match.group(1)
-    return blobs
+    return _normalize_skill_md_role(blobs)
 
 
 def _copy_blobs(compare_dir: Path) -> Dict[str, Optional[str]]:
-    """{relative path: blob sha} for DRIFT_SOURCE_ROOTS inside the comparison copy.
+    """{relative path: blob sha} for the skill sources inside the comparison copy.
 
     A None value means the file exists but could not be read; paths absent from
     the copy are simply not keys (callers use _ABSENT to tell the two apart).
+    The SKILL.md role is normalized across layouts: a plugin-form copy's
+    skills/orch-lite/SKILL.md counts as its SKILL.md entry.
     """
     blobs: Dict[str, Optional[str]] = {}
     for root in DRIFT_SOURCE_ROOTS:
@@ -996,6 +1024,11 @@ def _copy_blobs(compare_dir: Path) -> Dict[str, Optional[str]]:
                     continue
                 rel = "/".join((root, *sub, name))
                 blobs[rel] = _blob_sha(Path(dirpath) / name)
+    if "SKILL.md" not in blobs:
+        # Plugin-form copy: the SKILL.md role lives outside the flat roots.
+        plugin_top = compare_dir / DRIFT_PLUGIN_SKILL_MD
+        if plugin_top.is_file():
+            blobs["SKILL.md"] = _blob_sha(plugin_top)
     return blobs
 
 
@@ -1004,7 +1037,9 @@ def _doctor_drift_findings(compare_dir: Path) -> List[str]:
 
     No findings (and no error) when the copy is absent or is not a directory,
     when HEAD is unusable, or when HEAD does not look like the skill source;
-    when the two installs agree the output is likewise nothing at all.
+    when the two installs agree the output is likewise nothing at all. Both
+    sides are role-normalized for SKILL.md (flat vs plugin layout), so
+    cross-layout installs compare by role and drift lines name the flat path.
     """
     if not compare_dir.is_dir():
         return []

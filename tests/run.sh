@@ -23,6 +23,11 @@ set -u
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SKILL_DIR" || exit 1
 
+# SKILL.md lives at skills/orch-lite/SKILL.md (plugin layout, Phase 1); the
+# hooks resolve it via _SKILL_MD_CANDIDATES. Temp-copy builders keep the
+# deployed flat shape (SKILL.md at the copy root).
+SKILL_MD="skills/orch-lite/SKILL.md"
+
 TMP_DIRS=()
 cleanup() { [ ${#TMP_DIRS[@]} -gt 0 ] && rm -rf "${TMP_DIRS[@]}"; }
 trap cleanup EXIT
@@ -52,7 +57,7 @@ fresh_copy() {
   d="$(mktemp -d)" || return 1
   TMP_DIRS+=("$d")
   mkdir -p "$d/skill" || return 1
-  cp -r "$SKILL_DIR/hooks" "$SKILL_DIR/scripts" "$SKILL_DIR/SKILL.md" "$d/skill/" || return 1
+  cp -r "$SKILL_DIR/hooks" "$SKILL_DIR/scripts" "$SKILL_DIR/$SKILL_MD" "$d/skill/" || return 1
   printf '%s\n' "$d/skill"
 }
 
@@ -121,9 +126,9 @@ fenced_prompt() {  # $1=fenced payload content
 # --- frontmatter ---
 
 case_fm_parse() {
-  python3 - <<'PY'
-import yaml
-src = open("SKILL.md").read()
+  python3 - "$SKILL_MD" <<'PY'
+import sys, yaml
+src = open(sys.argv[1]).read()
 parts = src.split("---", 2)
 if len(parts) < 3:
     raise SystemExit("no '---' frontmatter block")
@@ -315,7 +320,7 @@ case_3_5() {
   # Runs in the repo — session-init is idempotent/read-only there by design.
   local json
   json="$(printf '{}' | python3 hooks/session-init.py)" || return 1
-  python3 - "$json" <<'PY'
+  python3 - "$json" "$SKILL_MD" <<'PY'
 import hashlib, json, sys
 
 ctx = json.loads(sys.argv[1])["additionalContext"]
@@ -336,7 +341,7 @@ def skill_slice(lines, prefix):
         section.append(line)
     return "\n".join(section).strip()
 
-lines = open("SKILL.md").read().splitlines()
+lines = open(sys.argv[2]).read().splitlines()
 for prefix, label in (
     ("## 5 Invariants (memorize)", "5 Invariants (memorize)"),
     ("## Request Routing", "Request Routing"),
@@ -545,6 +550,43 @@ case_doctor_drift() {
   git -C "$dir" -c user.name=t -c user.email=t@l commit -qm "stop tracking scripts/multi-agent" || return 1
   out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$copy")" || { echo "doctor exited non-zero"; return 1; }
   [ "$out" = "doctor: all clear" ] || { echo "(e) non-skill repo reported: $out"; return 1; }
+
+  # (f)-(h) cross-layout: a plugin-layout HEAD (SKILL.md at
+  # skills/orch-lite/SKILL.md, the Phase 1 repo shape) vs a flat copy must
+  # compare by the SKILL.md ROLE — never a false "missing" storm for every
+  # path; a plugin-form copy matches the same way.
+  local prepo pcopy2
+  prepo="$root/prepo"; pcopy2="$root/pcopy"
+  mkdir -p "$prepo"/{hooks,references,scripts,tests,skills/orch-lite} "$prepo/multi-agent" "$pcopy2" || return 1
+  printf '# skill\n' > "$prepo/skills/orch-lite/SKILL.md"
+  printf 'multi-agent/\n.worktrees/\n' > "$prepo/.gitignore"
+  printf 'print("hook")\n' > "$prepo/hooks/session-init.py"
+  printf '# state\n' > "$prepo/references/03-state.md"
+  cp "$SKILL_DIR/scripts/multi-agent" "$prepo/scripts/multi-agent" || return 1
+  printf '# tests\n' > "$prepo/tests/scenarios.md"
+  git -C "$prepo" init -q -b main || return 1
+  git -C "$prepo" add -A || return 1
+  git -C "$prepo" -c user.name=t -c user.email=t@l commit -qm base || return 1
+  printf '{"tasks": {}}' > "$prepo/multi-agent/index.json" || return 1
+  cp -r "$prepo/hooks" "$prepo/references" "$prepo/scripts" "$prepo/tests" "$prepo/.gitignore" "$pcopy2/" || return 1
+  cp "$prepo/skills/orch-lite/SKILL.md" "$pcopy2/SKILL.md" || return 1
+
+  # (f) plugin HEAD vs in-sync flat copy -> role-matched, no drift at all
+  out="$(cd "$prepo" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$pcopy2")" || { echo "doctor exited non-zero"; return 1; }
+  [ "$out" = "doctor: all clear" ] || { echo "(f) plugin HEAD vs flat copy reported: $out"; return 1; }
+
+  # (g) altered flat-copy SKILL.md -> exactly 1 drift line, named by the role path
+  printf '# edited on disk\n' > "$pcopy2/SKILL.md" || return 1
+  out="$(cd "$prepo" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$pcopy2")" || { echo "doctor exited non-zero"; return 1; }
+  [ "$(grep -c '^drift: ' <<< "$out")" -eq 1 ] || { echo "(g) expected exactly 1 drift line: $out"; return 1; }
+  grep -q '^drift: SKILL.md (HEAD [0-9a-f]* != copy [0-9a-f]*)$' <<< "$out" || { echo "(g) role-named SKILL.md drift line missing: $out"; return 1; }
+
+  # (h) plugin-form copy (SKILL.md under skills/orch-lite/) -> all clear again
+  rm "$pcopy2/SKILL.md" || return 1
+  mkdir -p "$pcopy2/skills/orch-lite" || return 1
+  cp "$prepo/skills/orch-lite/SKILL.md" "$pcopy2/skills/orch-lite/SKILL.md" || return 1
+  out="$(cd "$prepo" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$pcopy2")" || { echo "doctor exited non-zero"; return 1; }
+  [ "$out" = "doctor: all clear" ] || { echo "(h) plugin HEAD vs plugin copy reported: $out"; return 1; }
 }
 
 # --- memory_set dotted-path list traversal (regression: traceback on lists) ---
@@ -633,7 +675,7 @@ run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skill
 run_case "3.7    session-init unwritable cwd -> fallback, exit 0" case_si_unwritable_cwd
 run_case "3.8    CLI unwritable cwd: doctor/list/init human lines" case_cli_unwritable_cwd
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
-run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate" case_doctor_drift
+run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate/cross-layout" case_doctor_drift
 run_case "MEM   memory_set traverses list indices, clean errors" case_mem_set_list
 run_case "PY39  every python file parses as 3.9 (hooks + CLI)"  case_py39_parse
 
