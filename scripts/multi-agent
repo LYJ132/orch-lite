@@ -32,6 +32,18 @@ Commands:
 """
 
 import sys
+
+# Python >= 3.9 guard, before anything else: one human line on stderr, then a
+# non-zero exit (unlike the hooks, the CLI has no fail-open path — a state
+# mutation half-understood by an old interpreter is worse than a clean stop).
+if sys.version_info < (3, 9):
+    sys.stderr.write(
+        "[orch-lite] multi-agent requires Python >= 3.9 "
+        "(found %d.%d); refusing to run. Upgrade Python or run via "
+        "`uv run --python 3.12 <script>`.\n" % sys.version_info[:2]
+    )
+    sys.exit(1)
+
 import os
 import re
 import json
@@ -388,7 +400,14 @@ def memory_get(args):
 
 
 def memory_set(args):
-    """Write shared memory (dotted path + JSON value)"""
+    """Write shared memory (dotted path + JSON value)
+
+    Dotted segments traverse dicts by key and LISTS by integer index
+    (contracts.0.rule writes the rule key of contracts[0]). A segment whose
+    type does not match the node (e.g. a non-integer segment at a list, an
+    out-of-range index, or descending into a scalar) is a clean usage error:
+    one error line + exit 1, never a traceback.
+    """
     ensure_multi_agent_dir()
     try:
         val = json.loads(args.value)
@@ -396,13 +415,57 @@ def memory_set(args):
         print("Error: --value must be valid JSON")
         return 1
 
+    def _list_index(segment: str, node) -> Optional[int]:
+        """Parse a segment as a list index; None (with message printed) if invalid."""
+        try:
+            return int(segment)
+        except ValueError:
+            print(f"Error: segment '{segment}' addresses a list -- use an integer index (e.g. contracts.0.rule)")
+            return None
+
     parts = args.key.split(".")
     with _memory_lock():  # serialize load -> modify -> save across concurrent writers
         data = load_json(MEMORY_FILE)
         node = data
         for p in parts[:-1]:
-            node = node.setdefault(p, {})
-        node[parts[-1]] = val
+            if isinstance(node, list):
+                idx = _list_index(p, node)
+                if idx is None:
+                    return 1
+                try:
+                    nxt = node[idx]
+                except IndexError:
+                    print(f"Error: index {idx} out of range (list has {len(node)} entries) at '{p}' in {args.key}")
+                    return 1
+                if not isinstance(nxt, (dict, list)):
+                    print(f"Error: cannot traverse through scalar {nxt!r} at '{p}' in {args.key}")
+                    return 1
+                node = nxt
+            elif isinstance(node, dict):
+                nxt = node.setdefault(p, {})
+                if not isinstance(nxt, (dict, list)):
+                    print(f"Error: cannot traverse through scalar {nxt!r} at '{p}' in {args.key}")
+                    return 1
+                node = nxt
+            else:
+                print(f"Error: cannot descend into {type(node).__name__} at '{p}' in {args.key}")
+                return 1
+
+        last = parts[-1]
+        if isinstance(node, list):
+            idx = _list_index(last, node)
+            if idx is None:
+                return 1
+            try:
+                node[idx] = val
+            except IndexError:
+                print(f"Error: index {idx} out of range (list has {len(node)} entries) at '{last}' in {args.key}")
+                return 1
+        elif isinstance(node, dict):
+            node[last] = val
+        else:
+            print(f"Error: cannot write into {type(node).__name__} at '{last}' in {args.key}")
+            return 1
         save_json(MEMORY_FILE, data)
     print(f"Wrote memory at {args.key}")
     return 0
