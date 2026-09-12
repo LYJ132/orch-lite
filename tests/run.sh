@@ -6,6 +6,17 @@
 # inside the repo is idempotent by design — init creates-if-missing, list and
 # doctor are pure reads).
 #
+# Git discovery is ceiling-restricted so the sandboxes are HERMETIC: a repo at
+# an ancestor of $TMPDIR (e.g. a stray /tmp/.git left by an init run whose cwd
+# was reset) must never be discovered inside a temp project — that exact leak
+# is what broke 3.1 ("git not bootstrapped": init saw /tmp's repo and skipped
+# bootstrapping). The ceiling dir itself is excluded from the upward walk.
+export GIT_CEILING_DIRECTORIES="${TMPDIR:-/tmp}"
+#
+# dispatch-validate is asserted against ZCode's real hook contract (v4):
+# pass = exit 0 with EMPTY stdout; deny = exit 2 with the reason on STDERR;
+# internal error = fail-open exit 0 with a stderr diagnostic. No JSON ever.
+#
 # Usage: bash tests/run.sh   (exit 0 + per-case PASS/FAIL summary + ALL PASS)
 set -u
 
@@ -47,30 +58,44 @@ fresh_copy() {
 
 # --- assertion helpers (exit non-zero with a message on mismatch) ---
 
-expect_allow() {  # $1=hook stdout
-  python3 - "$1" <<'PY'
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-except Exception:
-    sys.exit(f"not valid JSON: {sys.argv[1][:200]!r}")
-if d.get("decision") != "allow":
-    sys.exit(f"expected allow, got {d}")
-PY
+# dispatch-validate run harness: DV_RC / DV_STDOUT / DV_STDERR globals.
+DV_ERR_FILE="$(mktemp)"
+TMP_DIRS+=("$DV_ERR_FILE")
+DV_RC=0
+DV_STDOUT=""
+DV_STDERR=""
+
+dv_run() {  # $1=event json — run the PreToolUse hook, capture all three channels
+  DV_STDOUT="$(printf '%s' "$1" | python3 hooks/dispatch-validate.py 2>"$DV_ERR_FILE")"
+  DV_RC=$?
+  DV_STDERR="$(cat "$DV_ERR_FILE")"
 }
 
-expect_deny() {  # $1=hook stdout  $2=required reason substring
-  python3 - "$1" "$2" <<'PY'
-import json, sys
-try:
-    d = json.loads(sys.argv[1])
-except Exception:
-    sys.exit(f"not valid JSON: {sys.argv[1][:200]!r}")
-if d.get("decision") != "deny":
-    sys.exit(f"expected deny, got {d}")
-if sys.argv[2] and sys.argv[2] not in d.get("reason", ""):
-    sys.exit(f"reason lacks {sys.argv[2]!r}: {d.get('reason')!r}")
-PY
+expect_pass() {  # ZCode pass shape: exit 0, empty stdout (reason channel unused)
+  if [ "$DV_RC" -ne 0 ]; then
+    printf 'expected exit 0 (pass), got %s (stderr: %s)\n' "$DV_RC" "$DV_STDERR"
+    return 1
+  fi
+  if [ -n "$DV_STDOUT" ]; then
+    printf 'expected EMPTY stdout on pass, got %s\n' "$DV_STDOUT"
+    return 1
+  fi
+}
+
+expect_deny() {  # $1=required stderr substring — ZCode deny shape: exit 2, empty stdout, reason on stderr
+  local reason="$1"
+  if [ "$DV_RC" -ne 2 ]; then
+    printf 'expected exit 2 (deny), got %s (stderr: %s)\n' "$DV_RC" "$DV_STDERR"
+    return 1
+  fi
+  if [ -n "$DV_STDOUT" ]; then
+    printf 'deny must print nothing on stdout, got %s\n' "$DV_STDOUT"
+    return 1
+  fi
+  case "$DV_STDERR" in
+    *"$reason"*) : ;;
+    *) printf 'stderr lacks %s: got %s\n' "$reason" "$DV_STDERR"; return 1 ;;
+  esac
 }
 
 # Build an Agent-shaped PreToolUse event; args: tool_name, prompt, rib(true|false|absent)
@@ -85,10 +110,6 @@ elif rib == "false":
     ti["run_in_background"] = False
 print(json.dumps({"tool_name": tool_name, "tool_input": ti}))
 PY
-}
-
-dv_with_event() {  # $1=event json — run PreToolUse hook, print its stdout
-  printf '%s' "$1" | python3 hooks/dispatch-validate.py
 }
 
 PKG_OK='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"]}'
@@ -114,81 +135,89 @@ for key in ("name", "description"):
 PY
 }
 
-# --- Hook 1: dispatch-validate (matrix 1.1–1.12) ---
+# --- Hook 1: dispatch-validate (matrix 1.1–1.12, v4 exit-code contract) ---
 
-case_1_1() { expect_allow "$(dv_with_event "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" true)")"; }
+case_1_1() { dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" true)"; expect_pass; }
 
 case_1_2() {
   local pkg='{"task_id": "probe-1", "role": "impl", "acceptance_criteria": ["a"]}'
-  expect_deny "$(dv_with_event "$(agent_event Agent "$(fenced_prompt "$pkg")" true)")" "Missing: objective"
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "Missing: objective"
 }
 
 case_1_3() {
   local pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"feature_id\": \"Bad_Branch!\"}"
-  expect_deny "$(dv_with_event "$(agent_event Agent "$(fenced_prompt "$pkg")" true)")" "feature_id must match"
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "feature_id must match"
 }
 
 case_1_4() {
-  expect_deny "$(dv_with_event "$(agent_event Agent "just prose, no fences here" true)")" "Every Agent call from the main session is a dispatch"
+  dv_run "$(agent_event Agent "just prose, no fences here" true)"
+  expect_deny "Every Agent call from the main session is a dispatch"
 }
 
 case_1_5() {
-  local prompt out
-  prompt="$(fenced_prompt '{"task_id": broken,,,}')"
-  out="$(dv_with_event "$(agent_event Agent "$prompt" true)")" || return 1
-  expect_deny "$out" "not valid JSON"
+  dv_run "$(agent_event Agent "$(fenced_prompt '{"task_id": broken,,,}')" true)"
+  expect_deny "not valid JSON"
 }
 
 case_1_6() {
   local pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"instance_id\": \"retired-ignorer\"}"
-  expect_allow "$(dv_with_event "$(agent_event Agent "$(fenced_prompt "$pkg")" true)")"
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
 }
 
 case_1_7() {
   # Real-shaped Agent tool_input (description/prompt/subagent_type/run_in_background),
   # no fenced JSON → deny, never crash.
-  local ev out
+  local ev
   ev="$(agent_event Agent 'Dispatch the login fix.
 No package here — this shape is what the platform actually sends.' true)"
-  out="$(dv_with_event "$ev")" || return 1
-  expect_deny "$out" "Every Agent call from the main session is a dispatch"
+  dv_run "$ev"
+  expect_deny "Every Agent call from the main session is a dispatch"
 }
 
 case_1_8() {
-  # Malformed stdin → silent exit 0, empty stdout, never block.
+  # Malformed stdin → fail-open: exit 0, empty stdout, one-line stderr
+  # diagnostic (v4 contract; never blocks the call).
   # (No NUL bytes: bash command substitution silently drops them.)
-  local out
-  out="$(printf '%s' 'not json {{{ %%%' | python3 hooks/dispatch-validate.py)" || return 1
+  local out rc=0
+  out="$(printf '%s' 'not json {{{ %%%' | python3 hooks/dispatch-validate.py 2>"$DV_ERR_FILE")" || rc=$?
+  [ "$rc" -eq 0 ] || { printf 'expected exit 0 (fail-open), got %s\n' "$rc"; return 1; }
   [ -z "$out" ] || { printf 'expected empty stdout, got %s\n' "$out"; return 1; }
-  out="$(printf '\xff\xfe\x80binary-invalid-utf8' | python3 hooks/dispatch-validate.py)" || return 1
+  grep -q "failing open" "$DV_ERR_FILE" || { printf 'expected fail-open diagnostic on stderr, got: %s\n' "$(cat "$DV_ERR_FILE")"; return 1; }
+  out="$(printf '\xff\xfe\x80binary-invalid-utf8' | python3 hooks/dispatch-validate.py 2>/dev/null)" || return 1
   [ -z "$out" ]
 }
 
 case_1_9() {
-  expect_allow "$(dv_with_event "$(agent_event Task "$(fenced_prompt "$PKG_OK")" true)")"
+  dv_run "$(agent_event Task "$(fenced_prompt "$PKG_OK")" true)"
+  expect_pass
 }
 
 case_1_10() {
   local pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"feature_id\": \"payment\"}"
-  expect_allow "$(dv_with_event "$(agent_event Agent "$(fenced_prompt "$pkg")" true)")"
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
 }
 
 case_1_11() {
-  expect_deny "$(dv_with_event "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" absent)")" "run_in_background"
+  dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" absent)"
+  expect_deny "run_in_background"
 }
 
 case_1_12() {
-  expect_deny "$(dv_with_event "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" false)")" "run_in_background"
+  dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" false)"
+  expect_deny "run_in_background"
 }
 
 # Fail-soft audit probe: structurally broken tool_input payloads must yield
-# silent exit 0 (not a traceback), same family as 1.8.
+# the pass shape (exit 0, silent) or a clean deny — never a traceback.
 case_1_audit_shapes() {
-  local out
-  out="$(printf '%s' '{"tool_name": "Agent", "tool_input": ["not","a","dict"]}' | python3 hooks/dispatch-validate.py)" || return 1
-  [ -z "$out" ] || { printf 'list tool_input should be silent, got %s\n' "$out"; return 1; }
-  out="$(printf '%s' '{"tool_name": "Agent", "tool_input": {"prompt": 42, "run_in_background": "true"}}' | python3 hooks/dispatch-validate.py)" || return 1
-  expect_deny "$out" "Every Agent call"  # non-str prompt coerced; still a deny decision, no crash
+  dv_run "$(printf '%s' '{"tool_name": "Agent", "tool_input": ["not","a","dict"]}')"
+  expect_pass
+  dv_run "$(printf '%s' '{"tool_name": "Agent", "tool_input": {"prompt": 42, "run_in_background": "true"}}')"
+  expect_deny "Every Agent call"  # non-str prompt coerced; still a deny, no crash
 }
 
 # --- Hook 3: session-init (matrix 3.1–3.6) + fail-soft audit ---
@@ -459,6 +488,64 @@ case_doctor_drift() {
   [ "$out" = "doctor: all clear" ] || { echo "(e) non-skill repo reported: $out"; return 1; }
 }
 
+# --- memory_set dotted-path list traversal (regression: traceback on lists) ---
+
+case_mem_set_list() {
+  # memory set must traverse lists by integer index (contracts.0.rule),
+  # and any type mismatch (non-int segment at a list, out-of-range index,
+  # descending into a scalar) must be a CLEAN usage error — one error line,
+  # exit 1, never a traceback (the pre-fix CLI crashed with
+  # AttributeError: 'list' object has no attribute 'setdefault').
+  local d out
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" init ) >/dev/null || return 1
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory append --array contracts --entry '{"id": "c1", "rule": "old"}' ) >/dev/null || return 1
+
+  # (a) traverse into a list element and set a key inside it
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory set --key contracts.0.rule --value '"new"' ) >/dev/null || return 1
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory get --key contracts.0.rule)" || return 1
+  [ "$out" = "new" ] || { printf 'expected contracts.0.rule=new, got %s\n' "$out"; return 1; }
+
+  # (b) int segment on the final part replaces the list element itself
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory set --key contracts.0 --value '{"id": "c1", "rule": "v2"}' ) >/dev/null || return 1
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory get --key contracts.0.id)" || return 1
+  [ "$out" = "c1" ] || { printf 'expected contracts.0.id=c1 after index set, got %s\n' "$out"; return 1; }
+
+  # (c) non-integer segment at a list -> clean usage error, exit 1
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory set --key contracts.bad.rule --value '1' 2>&1)" && { printf 'non-int list segment should fail\n'; return 1; }
+  grep -q "Traceback" <<< "$out" && { printf 'traceback leaked:\n%s\n' "$out"; return 1; }
+  grep -q "addresses a list" <<< "$out" || { printf 'expected clean usage error, got:\n%s\n' "$out"; return 1; }
+
+  # (d) out-of-range index -> clean usage error, exit 1
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory set --key contracts.9.x --value '1' 2>&1)" && { printf 'out-of-range index should fail\n'; return 1; }
+  grep -q "Traceback" <<< "$out" && { printf 'traceback leaked:\n%s\n' "$out"; return 1; }
+  grep -q "out of range" <<< "$out" || { printf 'expected out-of-range error, got:\n%s\n' "$out"; return 1; }
+}
+
+# --- Python >= 3.9 parseability (the version guards' advertised minimum) ---
+
+case_py39_parse() {
+  # Every *.py (both hooks included) plus the extensionless scripts/multi-agent
+  # must parse under the Python 3.9 grammar — older interpreters must hit the
+  # hooks' one-line stderr guard / CLI's non-zero guard, never a SyntaxError
+  # traceback. feature_version checks syntax only, which is exactly the guard
+  # contract: the guard lines themselves run before any 3.10+ API use.
+  python3 - <<'PY'
+import ast, pathlib, sys
+paths = sorted(set(pathlib.Path(".").glob("*/*.py")))
+paths.append(pathlib.Path("scripts/multi-agent"))
+names = {p.name for p in paths}
+assert {"dispatch-validate.py", "session-init.py"} <= names, f"hooks missing from collection: {names}"
+for p in paths:
+    try:
+        ast.parse(p.read_text(), filename=str(p), feature_version=(3, 9))
+    except SyntaxError as e:
+        sys.exit(f"{p}: not Python-3.9 parseable: {e}")
+print(f"{len(paths)} files parse under the Python 3.9 grammar")
+PY
+}
+
 # --- run everything ---
 
 run_case "FM.1   SKILL.md YAML frontmatter parses"        case_fm_parse
@@ -469,7 +556,7 @@ run_case "1.4    no fenced block -> deny"                 case_1_4
 run_case "1.5    malformed fenced JSON -> deny"           case_1_5
 run_case "1.6    retired instance_id ignored -> allow"    case_1_6
 run_case "1.7    real-shaped no-fence input -> deny"      case_1_7
-run_case "1.8    malformed stdin -> silent exit 0"        case_1_8
+run_case "1.8    malformed stdin -> fail-open exit 0"        case_1_8
 run_case "1.9    Task alias + valid package -> allow"     case_1_9
 run_case "1.10   branch-safe feature_id -> allow"         case_1_10
 run_case "1.11   background absent -> deny"               case_1_11
@@ -486,6 +573,8 @@ run_case "audit  session-init missing CLI -> exit 0"      case_si_audit_no_cli
 run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skillmd
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
 run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate" case_doctor_drift
+run_case "MEM   memory_set traverses list indices, clean errors" case_mem_set_list
+run_case "PY39  every python file parses as 3.9 (hooks + CLI)"  case_py39_parse
 
 printf '%s\n' "${SUMMARY[@]}"
 echo

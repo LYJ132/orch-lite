@@ -18,17 +18,31 @@ own location (`__file__`) — zero hardcoded absolute paths. On session start:
 
 Graceful degradation: any error → best-effort output; the hook always exits 0
 and prints exactly one {"additionalContext": ...} JSON — it never crashes the
-session.
+session. (That shape is ZCode-valid: stdout JSON is parsed against a schema
+that accepts a top-level additionalContext string.)
+
+Requires Python >= 3.9 (guarded below: older interpreters get a one-line
+stderr message and fail-open exit 0, never a traceback).
 """
-# Lazy annotations: builtin-generic / `X | None` annotations must never be
-# evaluated at import time, or an interpreter older than 3.9/3.10 turns the
-# hook into an uncaught traceback before main() (fail-soft contract).
-from __future__ import annotations
+# Python >= 3.9 guard, first thing after the docstring: an interpreter too
+# old to run the hook must print one human line and fail-open (exit 0), not
+# traceback. `%`-formatting only — this file must also PARSE on pre-3.6
+# interpreters (no f-strings before the guard).
+import sys
+
+if sys.version_info < (3, 9):
+    sys.stderr.write(
+        "[orch-lite] session-init requires Python >= 3.9 "
+        "(found %d.%d); failing open (session continues without injected "
+        "context). Upgrade Python or run via `uv run --python 3.12 "
+        "<script>`.\n" % sys.version_info[:2]
+    )
+    sys.exit(0)
 
 import json
 import subprocess
-import sys
 from pathlib import Path
+from typing import List, Tuple
 
 # Skill root: this hook lives in <skill>/hooks/, so the parent's parent is the
 # skill root. Everything (CLI, SKILL.md) is resolved from here — the skill
@@ -68,7 +82,7 @@ def read_stdin_event() -> dict:
         return {}
 
 
-def run_cli(args: list[str], timeout: int = 15) -> tuple[int, str]:
+def run_cli(args: List[str], timeout: int = 15) -> Tuple[int, str]:
     """Run the skill CLI via the current Python interpreter (no exec bit
     required), returning (returncode, output). Never raises."""
     try:
@@ -97,7 +111,7 @@ def health_section() -> str:
     return out
 
 
-def extract_contract(heading_prefix: str, lines: list[str]) -> str:
+def extract_contract(heading_prefix: str, lines: List[str]) -> str:
     """Extract one section (heading → next '---' / '## ') from `lines` verbatim.
 
     Falls back to a one-line warning if missing — never crashes.
@@ -120,7 +134,7 @@ def extract_contract(heading_prefix: str, lines: list[str]) -> str:
     return contract or MISSING_CONTRACT
 
 
-def contract_sections() -> list[tuple[str, str]]:
+def contract_sections() -> List[Tuple[str, str]]:
     """(label, verbatim section text) pairs for every CONTRACT_SECTIONS entry."""
     try:
         lines = SKILL_MD.read_text().splitlines()
