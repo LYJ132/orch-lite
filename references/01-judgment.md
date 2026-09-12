@@ -52,13 +52,13 @@ This is a "blunt" gate: it cannot see *which file* another child is writing, so 
 ### 1.12 Shared Resources Are Protected by Mechanisms, Not Memory
 - Shared-memory writes are serialized by a flock the CLI takes internally on `multi-agent/memory/.lock`; agents just call the CLI
 
-### 1.12 Experiences Are Cast Directly Into Contracts
+### 1.13 Experiences Are Cast Directly Into Contracts
 No separate SOP layer. Record-time decision (N18): if it can be condensed into a "must-follow" rule/flow → contract; one-off → experience; **unsure → ask the user**.
 
-### 1.13 Do Not Add Complexity for Problems That Have Not Occurred
+### 1.14 Do Not Add Complexity for Problems That Have Not Occurred
 Build a minimal skeleton → run → discover real problems → analyze → design → user confirms → write a rule/contract. Do not pre-suppose distributed scheduling, unlimited autonomy, complex state machines, or a full exception framework.
 
-### 1.14 Errors: Minimize Post-Hoc Rework, Do Not Over-Confirm Up Front
+### 1.15 Errors: Minimize Post-Hoc Rework, Do Not Over-Confirm Up Front
 Errors are low-probability and never fully preventable, so the response is **not** to repeatedly ask the user / thin-slice tasks for stepwise confirmation in advance (many tasks cannot be stepwise-confirmed). Instead keep the cost of any single mistake minimal: commit incrementally (checkpoint commits — commit each completed segment as you go, not one late commit at the end), so when an error does surface only the failed tail is redone, and the committed good work survives the T2 worktree removal.
 
 ---
