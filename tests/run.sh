@@ -400,6 +400,65 @@ case_doctor() {
   grep -q "doctor: all clear" <<< "$out" || { echo "(b) expected 'doctor: all clear' in the merged-clean repo"; return 1; }
 }
 
+# --- doctor check (4) in a scratch repo: HEAD tracked sources vs an install ---
+
+case_doctor_drift() {
+  # Dual-install drift: HEAD's *tracked* sources (never the working tree) are
+  # compared by blob hash against --compare-dir. In sync or copy absent -> no
+  # finding at all; altered / added / removed files -> one `drift:` line each.
+  # Sandboxes are mktemp -d, independent of this repo and of ~/.agents.
+  local root dir copy out
+  root="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$root")
+  dir="$root/repo"; copy="$root/copy"
+  mkdir -p "$dir"/{hooks,references,scripts,tests} "$copy" "$dir/multi-agent" || return 1
+  printf '# skill\n' > "$dir/SKILL.md"
+  printf 'multi-agent/\n.worktrees/\n' > "$dir/.gitignore"
+  printf 'print("hook")\n' > "$dir/hooks/session-init.py"
+  printf '# state\n' > "$dir/references/03-state.md"
+  cp "$SKILL_DIR/scripts/multi-agent" "$dir/scripts/multi-agent" || return 1   # the gate wants a skill-shaped HEAD
+  printf '# tests\n' > "$dir/tests/scenarios.md"
+  printf 'not a source root\n' > "$dir/README.md"                               # must never be compared
+  git -C "$dir" init -q -b main || return 1
+  git -C "$dir" add -A || return 1
+  git -C "$dir" -c user.name=t -c user.email=t@l commit -qm base || return 1
+  printf '{"tasks": {}}' > "$dir/multi-agent/index.json" || return 1
+  cp -r "$dir/hooks" "$dir/references" "$dir/scripts" "$dir/tests" "$dir/SKILL.md" "$dir/.gitignore" "$copy/" || return 1
+
+  # (a) identical copy -> no drift finding
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$copy")" || { echo "doctor exited non-zero"; return 1; }
+  [ "$out" = "doctor: all clear" ] || { echo "(a) in-sync copy reported: $out"; return 1; }
+
+  # (b) absent copy -> lenient: same output, still exit 0
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$root/no-such-install")" || { echo "doctor exited non-zero"; return 1; }
+  [ "$out" = "doctor: all clear" ] || { echo "(b) absent copy reported: $out"; return 1; }
+
+  # (c) working-tree dirt is not drift: HEAD is the comparison side
+  printf 'uncommitted edit\n' >> "$dir/SKILL.md" || return 1
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$copy")" || { echo "doctor exited non-zero"; return 1; }
+  [ "$out" = "doctor: all clear" ] || { echo "(c) working-tree dirt reported as drift: $out"; return 1; }
+  git -C "$dir" checkout -q -- SKILL.md || return 1
+
+  # (d) one altered + one added + one removed in the copy -> exactly those 3
+  printf '# edited on disk\n' > "$copy/SKILL.md" || return 1
+  printf 'extra\n' > "$copy/tests/added-in-copy.md" || return 1
+  rm "$copy/references/03-state.md" || return 1
+  mkdir -p "$copy/scripts/__pycache__" && printf 'junk\n' > "$copy/scripts/__pycache__/multi-agent.pyc" || return 1
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$copy")" || { echo "doctor exited non-zero"; return 1; }
+  printf '%s\n' "$out"
+  [ "$(grep -c '^drift: ' <<< "$out")" -eq 3 ] || { echo "(d) expected exactly 3 drift lines (the planted .pyc must not count)"; return 1; }
+  grep -q '^drift: SKILL.md (HEAD [0-9a-f]* != copy [0-9a-f]*)$' <<< "$out" || { echo "(d) altered file not reported"; return 1; }
+  grep -q '^drift: references/03-state.md (tracked in HEAD, missing in copy)$' <<< "$out" || { echo "(d) removed file not reported"; return 1; }
+  grep -q '^drift: tests/added-in-copy.md (present in copy, not tracked in HEAD)$' <<< "$out" || { echo "(d) added file not reported"; return 1; }
+
+  # (e) a repo that is not the skill source stays silent (no false storm of
+  # "extra in copy" lines for every installed file)
+  rm "$dir/scripts/multi-agent" && git -C "$dir" add -A >/dev/null || return 1
+  git -C "$dir" -c user.name=t -c user.email=t@l commit -qm "stop tracking scripts/multi-agent" || return 1
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$copy")" || { echo "doctor exited non-zero"; return 1; }
+  [ "$out" = "doctor: all clear" ] || { echo "(e) non-skill repo reported: $out"; return 1; }
+}
+
 # --- run everything ---
 
 run_case "FM.1   SKILL.md YAML frontmatter parses"        case_fm_parse
@@ -426,6 +485,7 @@ run_case "audit  session-init empty stdin -> exit 0"      case_si_empty_stdin
 run_case "audit  session-init missing CLI -> exit 0"      case_si_audit_no_cli
 run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skillmd
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
+run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate" case_doctor_drift
 
 printf '%s\n' "${SUMMARY[@]}"
 echo
