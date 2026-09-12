@@ -107,13 +107,9 @@ Level 0: Main agent
 | Homogeneous concurrency | Derive workers when needed (same-type only) |
 | Report | Direct to the main session; temp doc on failure |
 
-### 4.2 Level 2 worker (only condition = homogeneous task parallelism)
-- **Workspace (N19)**: workers get NO worktree of their own — they work inside the **parent's worktree** (`.worktrees/<parent_task_id>/`)
-- **Execution**: each operates only its disjoint shard and **never commits** — the parent is the sole committer
-- **Products**: write to `artifacts/{task_id}/worker-{i}/`; the parent collects/merges, registers under `index update` products
-- **Session end**: auto-ended by the platform; nothing to clean up (no worktree)
-- **Failure**: worker returns success/failure+reason; parent retries ≤1 time, then marks the task failed and escalates to main
-- **Concurrency shortcut**: if a single command parallelizes (e.g. `pytest -n auto`), do NOT derive workers.
+### 4.2 Level 2 worker
+
+Worker mechanism retired on this platform.
 
 > **Platform constraint (grandchild probe, 2026-09-11)**: worker spawning is conditional on platform support for nested agent spawning. On the current platform the Agent tool is unavailable inside subagents (`Tool not found: Agent`), so level-2 workers cannot exist here. Where unsupported, the **main agent dispatches homogeneous shards directly (flat parallelism)**, and command-level concurrency is preferred. The ≥3-shard threshold applies only on platforms that support nesting.
 

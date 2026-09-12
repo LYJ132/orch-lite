@@ -27,7 +27,7 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 ## 5 Invariants (memorize)
 
-1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package + `run_in_background: true` (non-blocking background: the main session does not wait, returns to the user immediately, and waits for the next request). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
+1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package + `run_in_background: true` (non-blocking background). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
 2. **Isolation is gated on concurrency; `main` is never a child's write area.** Single task (no other child running) → child works in the primary working tree on a `feature/<feature_id>` branch it creates and checks out before its first write — never committing on `main`. Concurrency present → give the newcomer a worktree (`.worktrees/<task_id>/`) on its `feature/<feature_id>` branch. One feature = one long-lived branch.
 3. **Children never commit on main.** They commit only in their write area (worktree, or working tree checked out on their `feature/<feature_id>` branch, per #2), authored as `<task_id>`; `main` only receives integration merges, made by the main agent.
 4. **Commit incrementally before reporting.** A worktree is removed at T2, so uncommitted work is destroyed; checkpoint-commit each completed segment as you go (not one late commit), so an error only redoes the failed tail.
@@ -55,7 +55,7 @@ Only pure conversation / reading files to answer is handled by the main session 
 
 Step 0 (mandatory, every request — even a bare greeting): before acting, output one line choosing among three states — intent judged by the model, not by keyword heuristics:
 - `[routing] chat → handle directly` — pure conversation (including reading a file to answer); no dispatch.
-- `[routing] task → single dispatch to <role>-<id> (run_in_background=true)` — choose this only after the decomposition check below comes back negative: one child agent does the work via the Agent tool with a dispatch package embedded as a fenced JSON block in the **Dispatch Package (MUST template)** shape (next section). Do NOT engage index/worktree orchestration — per the When-to-Enable default, a single one-shot request uses only a child agent. The main agent must NOT wait: `run_in_background: true` keeps the user unblocked (principle 1), since a foreground dispatch blocks the turn and pausing the session then cancels the child.
+- `[routing] task → single dispatch to <role>-<id> (run_in_background=true)` — choose this only after the decomposition check below comes back negative: one child agent does the work via the Agent tool with a dispatch package embedded as a fenced JSON block in the **Dispatch Package (MUST template)** shape (next section). Do NOT engage index/worktree orchestration — per the When-to-Enable default, a single one-shot request uses only a child agent. The main agent must NOT wait: `run_in_background: true` keeps the user unblocked (principle 1).
 - `[routing] orchestration → enable index+worktrees` — when a child agent is already running and the user submits a new request, when the decomposition check finds ≥2 independent work items (parallel dispatch, one branch each), or multiple different-function agents are needed in parallel (>3 heterogeneous parallel packages need user approval, N11; homogeneous does not).
 Choosing between `task` and `orchestration` requires two checks — a state check (verify whether any child agent is still running; never assume from file non-overlap) and a decomposition check. Decompose before serializing: if the request breaks into ≥2 work items with disjoint file sets and no output dependency (one consumes the other's result), parallel dispatch via one branch each is the default; single `task` (or serial ordering) is legitimate only for a NAMED dependency or a shared-file constraint. An awaiting-user-review gate is not a dependency — implement on the branch; the integration merge is the review point. This line is the audit trail; skipping it is a protocol violation. When unsure which state applies (chat / task / orchestration), **ask the user** — do not guess (N1: silence ≥ 5 min → execute the best plan automatically).
 
@@ -116,30 +116,15 @@ Every dispatch prompt has exactly four parts, in order:
 1. `index show --feature-id <fid>` → existing product? → tell it to reference
 2. Else create per N11 and dispatch
 
-**Child/worker side**: after receiving a dispatch, follow the standard flow in [02-protocol.md §6](references/02-protocol.md).
+**Child side**: after receiving a dispatch, follow the standard flow in [02-protocol.md §6](references/02-protocol.md).
 
 ---
 
 ## CLI Quick Reference
 
-`index` / `worktree` / `memory` + top-level `init` / `doctor` (shared-memory writes are flocked internally by the CLI).
+CLI groups: `init` / `index` / `worktree` / `memory` / `doctor` — requires **Python >= 3.9** for the CLI and both hooks (older interpreters print a one-line stderr message; hooks fail-open, the CLI exits non-zero); uv users may run via `uv run --python 3.12 <script>` (docs only, no dependency).
 
-> Requirements: **Python >= 3.9** for the CLI and both hooks (older interpreters print a one-line stderr message; hooks fail-open, the CLI exits non-zero). uv users may run via `uv run --python 3.12 <script>` — docs only, no dependency.
-
-| Command | Purpose / User |
-|---|---|
-| `index create --task-id --role [--feature-id] [--objective] [--criteria …]` | Main, T1: flat entry, status=assigned |
-| `index update --task-id [--status --output --products]` | Main, T2: status/output/products; completed/failed → completed_at |
-| `index list` | flat list (`task_id \| role \| feature_id \| status`) |
-| `index show --task-id` / `--feature-id` | task detail / all tasks of a feature (reuse check) |
-| `worktree create --task-id --feature-id [--base main]` | Main, T1: worktree on `feature/<feature_id>` |
-| `worktree list` | worktrees + mapping; `[stale]` = index says terminal but dir exists |
-| `worktree remove --task-id [--force]` | Main, T2: remove (refuses if uncommitted); branch untouched |
-| `worktree merge --feature-id [--into main]` | Main: integrate (merge-tree pre-check) |
-| `memory list/get/set/append` | shared memory (CLI takes internal flock during set/append) |
-| `doctor [--compare-dir DIR]` | hygiene scan (dirty/stale worktrees, task_id-authored commits made directly on `main` — first-parent view, so merge-integrated feature commits stay clean — plus HEAD-vs-copy install drift vs `~/.agents/skills/orch-lite`); always exits 0 |
-
-Full params in [03-state.md](references/03-state.md).
+Full parameters: `./scripts/multi-agent <group> --help` or [references/03-state.md](references/03-state.md), which documents every row including the `doctor --compare-dir` install-drift check.
 
 ---
 
@@ -160,24 +145,6 @@ Full params in [03-state.md](references/03-state.md).
 
 ---
 
-## Hooks
+## Maintenance (not injected)
 
-| Hook | Event | Purpose |
-|---|---|---|
-| `session-init.py` | `SessionStart` | idempotent `init` + inject `index list` + probe `doctor` (Health) + inject the "Request Routing" and "Dispatch Package (MUST template)" sections verbatim from SKILL.md |
-| `dispatch-validate.py` | `PreToolUse` on `Agent\|Task` | enforces N15 by validating the fenced-JSON dispatch block (4 required fields; `feature_id` branch-safe) via the ZCode exit-code contract: pass → silent exit 0, deny → reason on stderr + exit 2, internal error → fail-open exit 0 (never JSON on stdout) |
-
-Both idempotent, degrade gracefully, never block.
-
----
-
-## Development & Maintenance
-
-Process documents (changelog, open questions P1–P8, design decisions) live **outside the skill** in `PROGRAMS/docs/lo-meta/` — not read at runtime.
-
-### Deployment rules (each was a real silent failure)
-
-1. **Copy/sync preserves exec bits and LF.** A `-rw-r--r--` script or a CRLF shebang (`env: 'python3\r'`) kills every hook with no visible error. Self-check after any sync: `ls -l hooks/ scripts/` (all must show `x`) and `grep -r $'\r' hooks/ scripts/` (must be empty).
-2. **`~/.zcode/cli/config.json` hook paths are absolute** — renaming the skill directory requires updating them.
-4. **`~/.zcode/skills/orch-lite/` is the primary editing target** — it is the copy wired to the registered hooks. After each change-set, propagate to `~/.agents/skills/orch-lite/`, `/home/linyujian/PROGRAMS/.agents/skills/orch-lite/`, and the plugin source `/home/linyujian/PROGRAMS/orch-lite/plugins/orch-lite/` (its `SKILL.md` lives at `skills/orch-lite/SKILL.md` inside the plugin), preserving exec bits and LF. Verify a propagation with `python3 scripts/multi-agent doctor` (default target `~/.agents/skills/orch-lite`; `--compare-dir DIR` points it at another install): check (4) compares HEAD's tracked sources (`SKILL.md`, `.gitignore`, `hooks/`, `references/`, `scripts/`, `tests/`) by blob hash against that copy and prints one `drift: <path> …` line per differing / one-side-missing file — nothing means the two installs agree (or the copy is absent).
-5. **Hooks are snapshotted at session start** — config/permission fixes only take effect in a NEW session; already-open sessions keep running the old (possibly dead) snapshot.
+Hooks and development/deployment docs: [docs/maintenance.md](docs/maintenance.md) — maintainer-facing, not runtime-injected.
