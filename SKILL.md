@@ -130,7 +130,7 @@ Every dispatch prompt has exactly four parts, in order:
 
 ## CLI Quick Reference
 
-`index` / `worktree` / `memory` + top-level `init` / `doctor` (no `boundary` group; shared-memory writes are flocked internally by the CLI).
+`index` / `worktree` / `memory` + top-level `init` / `doctor` (shared-memory writes are flocked internally by the CLI).
 
 > Requirements: **Python >= 3.9** for the CLI and both hooks (older interpreters print a one-line stderr message; hooks fail-open, the CLI exits non-zero). uv users may run via `uv run --python 3.12 <script>` — docs only, no dependency.
 
