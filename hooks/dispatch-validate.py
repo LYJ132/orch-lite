@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """PreToolUse hook: validate the fenced-JSON dispatch package in the prompt.
 
-The platform's Agent tool_input carries only description / prompt /
-subagent_type / run_in_background — the dispatch package lives inside the
-prompt TEXT as a fenced block, so the old marker-key sniffing never fired.
-v3 is HARD ENFORCEMENT: every Agent call from the main session is a
-dispatch. Scans the prompt for a fenced JSON block (```json ... ```;
-fallback: any fenced block whose content contains "task_id") and validates:
+ZCode hook contract (exit-code style — the safe one): stdout is parsed as
+STRICT JSON, so this hook prints NOTHING on stdout. Passing = exit 0 with
+empty output; denying = exit 2 (ZCode's deny for PreToolUse) with the reason
+as a one-line human message on STDERR. The legacy {"decision": ...} JSON
+shape is Claude-Code vocabulary: ZCode's output schema only accepts
+decision approve|block, so every legacy deny/allow JSON failed validation,
+the run was marked hook.run.failed and the gate silently passed everything
+through (fail-open forever). The exit-code path needs no output schema at
+all.
+
+v4 validation logic is IDENTICAL to v3 — only the output channel changed.
+Every Agent call from the main session is a dispatch. Scans the prompt for a
+fenced JSON block (```json ... ```; fallback: any fenced block whose content
+contains "task_id") and validates:
 
 - no fenced block   → deny (re-send with a ```json fenced block containing
   task_id/role/objective/acceptance_criteria (+optional feature_id))
@@ -17,20 +25,32 @@ fallback: any fenced block whose content contains "task_id") and validates:
                     → deny, listing them
 - feature_id present but not ^[a-z0-9][a-z0-9._-]*$
                     → deny (it names the feature/<feature_id> branch)
-- otherwise         → allow
+- otherwise         → allow (silent exit 0)
 
 instance_id is RETIRED: no longer a required or valid field; if present it is
-ignored. Malformed stdin or any internal error → silent exit 0 — the hook
-never blocks a call by accident.
+ignored. Malformed stdin or any internal error → fail-open: exit 0 with a
+one-line diagnostic on stderr — the hook never blocks a call by accident.
+
+Requires Python >= 3.9 (guarded below: older interpreters get a one-line
+stderr message and fail-open exit 0, never a traceback).
 """
-# Lazy annotations: `str | None` must not be evaluated at import time, or an
-# interpreter older than 3.10 turns the hook into an uncaught traceback
-# before main() (fail-soft contract).
-from __future__ import annotations
+
+import sys
+
+if sys.version_info < (3, 9):
+    # One-line human message, then fail-open: a hook that cannot run must
+    # never block the session. `%`-formatting: this line must also parse on
+    # pre-3.6 interpreters (no f-strings before the guard).
+    sys.stderr.write(
+        "[orch-lite] dispatch-validate requires Python >= 3.9 "
+        "(found %d.%d); failing open (call allowed). Upgrade Python or run "
+        "via `uv run --python 3.12 <script>`.\n" % sys.version_info[:2]
+    )
+    sys.exit(0)
 
 import json
 import re
-import sys
+from typing import Optional
 
 REQUIRED_FIELDS = ["task_id", "role", "objective", "acceptance_criteria"]
 
@@ -58,7 +78,7 @@ FOREGROUND_REASON = (
 )
 
 
-def find_dispatch_block(text: str) -> str | None:
+def find_dispatch_block(text: str) -> Optional[str]:
     """First ```json block; else the first fenced block mentioning task_id."""
     blocks = FENCE_RE.findall(text or "")
     for lang, content in blocks:
@@ -70,51 +90,46 @@ def find_dispatch_block(text: str) -> str | None:
     return None
 
 
-def evaluate(prompt: str, run_in_background) -> dict:
+def evaluate(prompt, run_in_background):
     """Validate the dispatch package found in `prompt`.
 
-    Returns {"decision": "allow"} or {"decision": "deny", "reason": ...}.
+    Returns (allowed, reason): (True, "") when the call may proceed,
+    (False, reason) with a human-readable deny reason otherwise.
     """
     block = find_dispatch_block(prompt)
     if block is None:
-        return {"decision": "deny", "reason": NO_BLOCK_REASON}
+        return False, NO_BLOCK_REASON
 
     if run_in_background is not True:
-        return {"decision": "deny", "reason": FOREGROUND_REASON}
+        return False, FOREGROUND_REASON
 
     try:
         package = json.loads(block)
     except Exception:
-        return {"decision": "deny", "reason": INVALID_JSON_REASON}
+        return False, INVALID_JSON_REASON
     if not isinstance(package, dict):
         package = {}  # valid JSON but not an object → all required fields missing
 
     missing = [f for f in REQUIRED_FIELDS if f not in package]
     if missing:
-        return {
-            "decision": "deny",
-            "reason": (
-                "Dispatch package violates N15: a dispatch must carry these "
-                "4 required fields (task_id, role, objective, "
-                "acceptance_criteria; instance_id is retired; optional: "
-                "feature_id). Missing: " + ", ".join(missing)
-            ),
-        }
+        return False, (
+            "Dispatch package violates N15: a dispatch must carry these "
+            "4 required fields (task_id, role, objective, "
+            "acceptance_criteria; instance_id is retired; optional: "
+            "feature_id). Missing: " + ", ".join(missing)
+        )
 
     feature_id = package.get("feature_id")
     if feature_id is not None and not FEATURE_ID_RE.match(str(feature_id)):
-        return {
-            "decision": "deny",
-            "reason": (
-                "feature_id must match [a-z0-9][a-z0-9._-]* (used as the "
-                "feature/<feature_id> branch name)"
-            ),
-        }
+        return False, (
+            "feature_id must match [a-z0-9][a-z0-9._-]* (used as the "
+            "feature/<feature_id> branch name)"
+        )
 
-    return {"decision": "allow"}
+    return True, ""
 
 
-def main() -> int:
+def main():
     try:
         raw = sys.stdin.read()
         event = json.loads(raw) if raw.strip() else {}
@@ -137,11 +152,19 @@ def main() -> int:
         if not isinstance(prompt, str):
             prompt = str(prompt)
 
-        decision = evaluate(prompt, tool_input.get("run_in_background"))
-        print(json.dumps(decision))
-    except Exception:
-        return 0  # malformed stdin / internal error → never block
-    return 0
+        allowed, reason = evaluate(prompt, tool_input.get("run_in_background"))
+        if allowed:
+            return 0  # pass: empty stdout, exit 0 (ZCode exit-code contract)
+        # deny: reason on STDERR, exit 2 (ZCode's deny for PreToolUse).
+        sys.stderr.write(reason.rstrip() + "\n")
+        return 2
+    except Exception as exc:
+        # Malformed stdin / internal error → fail-open, with a diagnostic.
+        sys.stderr.write(
+            "[orch-lite] dispatch-validate internal error, failing open "
+            "(call allowed): %r\n" % (exc,)
+        )
+        return 0
 
 
 if __name__ == "__main__":
