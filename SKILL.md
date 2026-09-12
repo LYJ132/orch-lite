@@ -122,24 +122,9 @@ Every dispatch prompt has exactly four parts, in order:
 
 ## CLI Quick Reference
 
-`index` / `worktree` / `memory` + top-level `init` / `doctor` (shared-memory writes are flocked internally by the CLI).
+CLI groups: `init` / `index` / `worktree` / `memory` / `doctor` — requires **Python >= 3.9** for the CLI and both hooks (older interpreters print a one-line stderr message; hooks fail-open, the CLI exits non-zero); uv users may run via `uv run --python 3.12 <script>` (docs only, no dependency).
 
-> Requirements: **Python >= 3.9** for the CLI and both hooks (older interpreters print a one-line stderr message; hooks fail-open, the CLI exits non-zero). uv users may run via `uv run --python 3.12 <script>` — docs only, no dependency.
-
-| Command | Purpose / User |
-|---|---|
-| `index create --task-id --role [--feature-id] [--objective] [--criteria …]` | Main, T1: flat entry, status=assigned |
-| `index update --task-id [--status --output --products]` | Main, T2: status/output/products; completed/failed → completed_at |
-| `index list` | flat list (`task_id \| role \| feature_id \| status`) |
-| `index show --task-id` / `--feature-id` | task detail / all tasks of a feature (reuse check) |
-| `worktree create --task-id --feature-id [--base main]` | Main, T1: worktree on `feature/<feature_id>` |
-| `worktree list` | worktrees + mapping; `[stale]` = index says terminal but dir exists |
-| `worktree remove --task-id [--force]` | Main, T2: remove (refuses if uncommitted); branch untouched |
-| `worktree merge --feature-id [--into main]` | Main: integrate (merge-tree pre-check) |
-| `memory list/get/set/append` | shared memory (CLI takes internal flock during set/append) |
-| `doctor [--compare-dir DIR]` | hygiene scan (dirty/stale worktrees, task_id-authored commits made directly on `main` — first-parent view, so merge-integrated feature commits stay clean — plus HEAD-vs-copy install drift vs `~/.agents/skills/orch-lite`); always exits 0 |
-
-Full params in [03-state.md](references/03-state.md).
+Full parameters: `./scripts/multi-agent <group> --help` or [references/03-state.md](references/03-state.md), which documents every row including the `doctor --compare-dir` install-drift check.
 
 ---
 
