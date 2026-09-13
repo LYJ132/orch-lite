@@ -27,8 +27,8 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 <EXTREMELY-IMPORTANT>
 1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package + `run_in_background: true` (non-blocking background). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
-2. **Isolation is gated on concurrency; `main` is never a child's write area.** Single task (no other child running) → child works in the primary working tree on a `feature/<feature_id>` branch it creates and checks out before its first write — never committing on `main`. Concurrency present → give the newcomer a worktree (`.worktrees/<task_id>/`) on its `feature/<feature_id>` branch. One feature = one long-lived branch.
-3. **Children never commit on main.** They commit only in their write area (worktree, or working tree checked out on their `feature/<feature_id>` branch, per #2), authored as `<task_id>`; `main` only receives integration merges, made by the main agent.
+2. **Isolation is gated on concurrency; `main` is never a child's write area.** Solo → the child works in the primary working tree; concurrency present → give the newcomer a worktree (`.worktrees/<task_id>/`). One feature = one long-lived branch. Commit/write-area mechanics: orch-lite-executor skill.
+3. **Children never commit on main.** `main` only receives integration merges, made by the main agent.
 4. **Commit incrementally before reporting.** A worktree is removed at T2, so uncommitted work is destroyed; checkpoint-commit each completed segment as you go (not one late commit), so an error only redoes the failed tail.
 5. **Check state before dispatching.** Is a child still running? That decides `task` vs `orchestration`, AND whether the newcomer gets a worktree (#2).
 "They are related, I will do them one by one" - related-but-independent work still parallelizes; only a shared file or a true output dependency serializes, because over-parallelism costs one merge while over-serialism costs the whole wall-clock.
