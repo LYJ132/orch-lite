@@ -101,11 +101,12 @@ Every dispatch prompt has exactly four parts, in order:
 ### NEW_TASK (user submits a request)
 1. `index list` → recover state
 2. Output the **decomposition list**: each work package + file scope. ≥2 disjoint scopes & no dependency → dispatch IN PARALLEL (`run_in_background: true`); serial only on a real dependency
-3. Reuse check: `index show --feature-id <fid>` — feature exists → propose reusing its branch
-4. **T1**: `worktree create --task-id --feature-id [--base main]`
-5. **T1**: `index create --task-id --role [--feature-id] [--objective] [--criteria …]`
-6. Dispatch the **fenced-JSON package** via Agent (`run_in_background: true`; prompt = JSON block + task-specific context only, never re-pasted process text)
-7. End the turn
+3. Continuation check: `index show --feature-id <fid>` - a COMPLETED task whose resumable agent (`agent_id` recorded) covered the same scope -> prefer resuming it (SendMessage with a continuation package: new objective + delta context + identity update) over a fresh dispatch; fresh child only when a parallel slot is needed or the old context is a liability (very long/messy).
+4. Reuse check: `index show --feature-id <fid>` — feature exists → propose reusing its branch
+5. **T1**: `worktree create --task-id --feature-id [--base main]`
+6. **T1**: `index create --task-id --role [--feature-id] [--objective] [--criteria …] [--agent-id <agent>]`
+7. Dispatch the **fenced-JSON package** via Agent (`run_in_background: true`; prompt = JSON block + task-specific context only, never re-pasted process text)
+8. End the turn
 
 ### TASK_COMPLETED (a child reports)
 1. `index update --task-id --status --output --products` (**T2**)

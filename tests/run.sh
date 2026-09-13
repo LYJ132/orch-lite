@@ -622,6 +622,27 @@ case_mem_set_list() {
   grep -q "out of range" <<< "$out" || { printf 'expected out-of-range error, got:\n%s\n' "$out"; return 1; }
 }
 
+case_index_agent_id() {
+  # --agent-id on index create/update is plain per-task metadata: stored,
+  # surfaced by index list (extra column) and index show (JSON dump), and
+  # influencing nothing else. Enables the continuation/reuse check (SKILL.md
+  # NEW_TASK step 2.5) to find a completed task's resumable agent.
+  local d out
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" init ) >/dev/null || return 1
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-aid-01 --role impl --feature-id fid --agent-id agent_set_at_create ) >/dev/null || return 1
+
+  # list shows the agent column
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index list)" || return 1
+  grep -q "impl-aid-01 | impl | fid | assigned | agent_set_at_create" <<< "$out" || { printf 'list missing agent column:\n%s\n' "$out"; return 1; }
+
+  # update overwrites the agent id
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index update --task-id impl-aid-01 --status running --agent-id agent_after_update ) >/dev/null || return 1
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-aid-01)" || return 1
+  grep -q '"agent_id": "agent_after_update"' <<< "$out" || { printf 'show missing updated agent_id:\n%s\n' "$out"; return 1; }
+}
+
 # --- Python >= 3.9 parseability (the version guards' advertised minimum) ---
 
 case_py39_parse() {
@@ -675,6 +696,7 @@ run_case "3.8    CLI unwritable cwd: doctor/list/init human lines" case_cli_unwr
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
 run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate/cross-layout" case_doctor_drift
 run_case "MEM   memory_set traverses list indices, clean errors" case_mem_set_list
+run_case "IDX   index --agent-id: set + read via list/show"     case_index_agent_id
 run_case "PY39  every python file parses as 3.9 (hooks + CLI)"  case_py39_parse
 
 printf '%s\n' "${SUMMARY[@]}"
