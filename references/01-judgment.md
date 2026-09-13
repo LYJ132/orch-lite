@@ -129,6 +129,8 @@ All context comes from files:
 
 Executors never "remember" a previous session; roles accumulate experience only through shared memory.
 
+**Context Reuse amendment (2026-09-13):** the PLATFORM, however, supports resuming a COMPLETED agent's session with full context intact (proven 2026-09-12: three rate-limit-killed children were resumed via SendMessage without losing context) — the stateless assumption applies to fresh dispatches only. Before a fresh dispatch for same-scope work, check the index (`index show --feature-id <fid>`) for a COMPLETED task with its `agent_id` recorded and prefer resuming that agent; identity/task_id keying stays unchanged.
+
 ---
 
 ## 6. Functional Role Mapping
