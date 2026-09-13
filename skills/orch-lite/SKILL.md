@@ -5,9 +5,7 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 # Orch-lite
 
-<SUBAGENT-STOP>
-**Audience gate — the routing protocol below targets the MAIN agent only.** If you are a dispatched child executor, stop here: do not re-route, do not dispatch or derive further agents (six-rule block rule 1), do not touch `main` — do the work in the workspace named for you and report.
-</SUBAGENT-STOP>
+<SUBAGENT-STOP>Dispatched child? Your handbook is the orch-lite-executor skill - read that instead.</SUBAGENT-STOP>
 
 **Runtime entry point.** Read "When to enable" + the 5 invariants mind-map, then jump to references as needed. Process/history docs live outside the skill (`PROGRAMS/docs/lo-meta/`).
 
@@ -29,8 +27,8 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 <EXTREMELY-IMPORTANT>
 1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package + `run_in_background: true` (non-blocking background). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
-2. **Isolation is gated on concurrency; `main` is never a child's write area.** Single task (no other child running) → child works in the primary working tree on a `feature/<feature_id>` branch it creates and checks out before its first write — never committing on `main`. Concurrency present → give the newcomer a worktree (`.worktrees/<task_id>/`) on its `feature/<feature_id>` branch. One feature = one long-lived branch.
-3. **Children never commit on main.** They commit only in their write area (worktree, or working tree checked out on their `feature/<feature_id>` branch, per #2), authored as `<task_id>`; `main` only receives integration merges, made by the main agent.
+2. **Isolation is gated on concurrency; `main` is never a child's write area.** Solo → the child works in the primary working tree; concurrency present → give the newcomer a worktree (`.worktrees/<task_id>/`). One feature = one long-lived branch. Commit/write-area mechanics: orch-lite-executor skill.
+3. **Children never commit on main.** `main` only receives integration merges, made by the main agent.
 4. **Commit incrementally before reporting.** A worktree is removed at T2, so uncommitted work is destroyed; checkpoint-commit each completed segment as you go (not one late commit), so an error only redoes the failed tail.
 5. **Check state before dispatching.** Is a child still running? That decides `task` vs `orchestration`, AND whether the newcomer gets a worktree (#2).
 "They are related, I will do them one by one" - related-but-independent work still parallelizes; only a shared file or a true output dependency serializes, because over-parallelism costs one merge while over-serialism costs the whole wall-clock.
@@ -121,7 +119,7 @@ Every dispatch prompt has exactly four parts, in order:
 1. `index show --feature-id <fid>` → existing product? → tell it to reference
 2. Else create per N11 and dispatch
 
-**Child side**: after receiving a dispatch, follow the standard flow in [02-protocol.md §6](references/02-protocol.md).
+**Child side**: after receiving a dispatch, the child follows its own skill, [orch-lite-executor](../orch-lite-executor/SKILL.md) — standard flow, commit discipline, reporting format (the process boilerplate lives there, not in 02-protocol §5).
 
 ---
 
@@ -135,7 +133,7 @@ Full parameters: `./scripts/multi-agent <group> --help` or [references/03-state.
 
 ## Memory (read before you re-derive, write when it cost you)
 
-- **Reading is the other half of the loop.** Facing a hard / non-obvious problem (main or a child)? Stop and read `multi-agent/memory/shared.json` `experiences` before re-solving from scratch — a recorded solution is already paid for. Then, at dispatch, point the child at it (§6 in `02-protocol`).
+- **Reading is the other half of the loop.** Facing a hard / non-obvious problem (main or a child)? Stop and read `multi-agent/memory/shared.json` `experiences` before re-solving from scratch — a recorded solution is already paid for. Then, at dispatch, point the child at it (executor handbook, "Standard Flow").
 - **Writing threshold**: record an **experience only** when a problem genuinely cost unusual time/energy to crack (not every hiccup). Condensable into a must-follow rule → **contract** instead. Unsure → ask the user.
 
 ---
