@@ -5,9 +5,7 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 # Orch-lite
 
-<SUBAGENT-STOP>
-**Audience gate — the routing protocol below targets the MAIN agent only.** If you are a dispatched child executor, stop here: do not re-route, do not dispatch or derive further agents (six-rule block rule 1), do not touch `main` — do the work in the workspace named for you and report.
-</SUBAGENT-STOP>
+<SUBAGENT-STOP>Dispatched child? Your handbook is the orch-lite-executor skill - read that instead.</SUBAGENT-STOP>
 
 **Runtime entry point.** Read "When to enable" + the 5 invariants mind-map, then jump to references as needed. Process/history docs live outside the skill (`PROGRAMS/docs/lo-meta/`).
 
@@ -121,7 +119,7 @@ Every dispatch prompt has exactly four parts, in order:
 1. `index show --feature-id <fid>` → existing product? → tell it to reference
 2. Else create per N11 and dispatch
 
-**Child side**: after receiving a dispatch, follow the standard flow in [02-protocol.md §6](references/02-protocol.md).
+**Child side**: after receiving a dispatch, the child follows its own skill, [orch-lite-executor](../orch-lite-executor/SKILL.md) — standard flow, commit discipline, reporting format (the process boilerplate lives there, not in 02-protocol §5).
 
 ---
 
@@ -135,7 +133,7 @@ Full parameters: `./scripts/multi-agent <group> --help` or [references/03-state.
 
 ## Memory (read before you re-derive, write when it cost you)
 
-- **Reading is the other half of the loop.** Facing a hard / non-obvious problem (main or a child)? Stop and read `multi-agent/memory/shared.json` `experiences` before re-solving from scratch — a recorded solution is already paid for. Then, at dispatch, point the child at it (§6 in `02-protocol`).
+- **Reading is the other half of the loop.** Facing a hard / non-obvious problem (main or a child)? Stop and read `multi-agent/memory/shared.json` `experiences` before re-solving from scratch — a recorded solution is already paid for. Then, at dispatch, point the child at it (executor handbook, "Standard Flow").
 - **Writing threshold**: record an **experience only** when a problem genuinely cost unusual time/energy to crack (not every hiccup). Condensable into a must-follow rule → **contract** instead. Unsure → ask the user.
 
 ---
