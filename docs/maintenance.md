@@ -4,6 +4,17 @@
 
 ---
 
+## Install
+
+Two supported installation paths (self-hosted marketplace; pick exactly one):
+
+1. **GitHub marketplace (recommended):** in ZCode's plugin Discover UI, press `+` and add the repository `LYJ132/orch-lite`. The marketplace manifest lives at `.claude-plugin/marketplace.json` (plugin source = repo root, skills at `./skills/`).
+2. **Local directory (development):** clone the repo and point the plugin loader at the local checkout directory (e.g. `/home/linyujian/.zcode/plugins-src/orch-lite`).
+
+**No double install.** Installing the plugin makes it the single install — a pre-existing flat copy (e.g. `~/.agents/skills/orch-lite`) must be retired and its absolute-path hook entries removed from `~/.zcode/cli/config.json` (`SessionStart` + `PreToolUse`), otherwise the same hooks and skills register twice. The plugin manifest already registers both hooks via `hooks/hooks.json` using `${CLAUDE_PLUGIN_ROOT}`.
+
+---
+
 ## Hooks
 
 | Hook | Event | Purpose |
