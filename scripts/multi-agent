@@ -76,7 +76,6 @@ GITIGNORE_LINES = ["multi-agent/", ".worktrees/"]
 def ensure_multi_agent_dir():
     """Ensure the multi-agent directory structure exists"""
     MULTI_AGENT_DIR.mkdir(exist_ok=True)
-    (MULTI_AGENT_DIR / "comm").mkdir(exist_ok=True)
     (MULTI_AGENT_DIR / "memory").mkdir(exist_ok=True)
 
     if not INDEX_FILE.exists():
@@ -1149,7 +1148,6 @@ def init_command(args):
     print(f"Initialized: {MULTI_AGENT_DIR}")
     print(f"  - {INDEX_FILE}")
     print(f"  - {MEMORY_FILE}")
-    print(f"  - {MULTI_AGENT_DIR / 'comm'}")
     return 0
 
 

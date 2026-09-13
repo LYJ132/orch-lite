@@ -124,7 +124,7 @@ line with exit 0 — the hook never crashes the session.
 
 | # | Setup | Expected | Actual |
 |---|---|---|---|
-| 3.1 | fresh project, no `multi-agent/` | creates the full tree (`index.json`, `memory/shared.json`, `comm/`; git bootstrapped when repo-less); all four memory sections present, index shows `Index is empty`, Health shows `doctor: all clear` | ✅ |
+| 3.1 | fresh project, no `multi-agent/` | creates the full tree (`index.json`, `memory/shared.json`; git bootstrapped when repo-less); all four memory sections present, index shows `Index is empty`, Health shows `doctor: all clear` | ✅ |
 | 3.2 | project with a populated index / existing `multi-agent/` | re-runs init idempotently (no overwrite), shows the flat task list, injects the Request Routing section, Health reflects doctor (e.g. stale/dirty findings) | ✅ |
 | 3.3 | SKILL.md without a "## Request Routing" section | graceful fallback line "(contract section missing in SKILL.md)" in additionalContext for that section, no crash (exit 0), init + index + Health still work | ✅ |
 | 3.4 | CLI copy predating the doctor subcommand | Health skipped silently (graceful-absence probe), the other sections intact, exit 0 | ✅ |
