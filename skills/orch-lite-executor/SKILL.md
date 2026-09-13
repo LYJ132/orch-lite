@@ -57,6 +57,16 @@ the report lists product paths + the commit so the main agent records them under
 
 ---
 
+## Write-area & Branch Mechanics
+
+- **Before your first write**, create and check out your branch: `git checkout -b feature/<feature_id>`. If the index (`index show --feature-id <fid>`) shows the feature already has a branch, reuse it — one feature = one long-lived branch.
+- **Solo (no other task running)**: your write area is the primary working tree, on that branch.
+- **Concurrent (a task is already running)**: the main agent gives you a worktree — `.worktrees/<task_id>/` — your ONLY write area; check out `feature/<feature_id>` there before your first write.
+- **Author every commit as your task_id**: `GIT_AUTHOR_NAME=<task_id> GIT_COMMITTER_NAME=<task_id>` plus a local email; commits land on `feature/<feature_id>`, so products survive worktree removal at T2.
+- **Never commit on `main`** — `main` only receives integration merges, made by the main agent.
+
+---
+
 ## Fail-soft Expectations
 
 - Errors happen; the design assumes they do. Commit incrementally so an error only redoes the failed tail.
