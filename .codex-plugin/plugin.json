@@ -16,7 +16,7 @@
     "workflow"
   ],
   "skills": "./skills/",
-  "hooks": {},
+  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Orch-lite",
     "shortDescription": "Lightweight multi-agent orchestration for coding agents",
