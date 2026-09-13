@@ -57,7 +57,7 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 **Default trigger: writing/modifying means dispatch.** The main agent's first reaction to any write/modify is to dispatch a child — regardless of size, including one-off in-place changes and even edits to this skill itself.
 
-Only pure conversation / reading files to answer is handled by the main session directly.
+Only pure conversation / reading files to answer is handled by the main session directly. Interact with the user in the language the user writes in - reports TO the user mirror their language; dispatches and child-facing text stay English.
 
 Step 0 (mandatory, every request — even a bare greeting): before acting, output one line choosing among three states — intent judged by the model, not by keyword heuristics:
 - `[routing] chat → handle directly` — pure conversation (including reading a file to answer); no dispatch.
