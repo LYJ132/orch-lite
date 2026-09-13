@@ -76,40 +76,7 @@ The dispatch prompt MUST embed the package as a fenced JSON block:
 
 ## 5. Standard Flow After an Executor Receives a Dispatch
 
-This section OWNS the process boilerplate — the main agent never re-pastes it. **Fresh executors**: if you were not given these steps, follow this flow:
-
-> **Dispatch prompt shape (MUST template — mirrored from SKILL.md "Dispatch Package")**: 1 identity line (`<task_id> (role: <role>). You are a dispatched child executor.`) + a six-rule MUST block — (1) do all work with your own tools, never dispatch/derive further agents; (2) work only in the named workspace per concurrency state (no other task running → the working tree on a `feature/<feature_id>` branch you create first; a task running → `.worktrees/<task_id>/`), never commit on main (`main` only receives integration merges by the main agent), never work outside it; (3) commit incrementally, authored as `<task_id>`, always before reporting; (4) check `multi-agent/memory/shared.json` + the index before re-deriving anything non-obvious; (5) follow every entry in memory `contracts[]`; (6) report `TASK_COMPLETED` + summary + commit hash, or a structured failure report — never go silent — + the fenced-JSON package (§4.1) + at most 3 context-pointer lines (file-unreachable facts only; secrets read-never-print).
-
-> **Worktree is optional (lazy isolation, §1.11)**: the dispatch JSON carries a `worktree` context line ONLY when the main agent found concurrency at dispatch; without it, write in the working tree — on your `feature/<feature_id>` branch, created and checked out before the first write, never on `main`.
-
-```
-Receive dispatch package
-    ↓
-Where can I write?
-  · JSON has a `worktree:` context line → enter `.worktrees/<task_id>/` (it IS your only write area)
-  · no worktree line → the working tree itself is your write area (single task, no concurrency)
-    ↓
-execute the work (in that write area)
-    ↓
-stuck on a hard / non-obvious problem?
-  → stop and read shared-memory `experiences` first (`multi-agent/memory/shared.json`)
-    before repeating attempts; a recorded solution avoids re-deriving it
-    ↓
-commit INCREMENTALLY — commit a completed segment, then move on; do NOT
-    leave everything for one late commit at the end — and always BEFORE reporting
-    (must-habit, not optional; GIT_AUTHOR_NAME=<task_id> + a local email; commits
-     land on the feature branch so products survive worktree removal at T2; when
-     there is no worktree, still commit to the feature branch so products are durable)
-    → incremental/checkpoint commits bound the cost of an error: redo only the
-      failed tail, committed good work is unaffected by T2
-    ↓
-self-check acceptance_criteria
-    ↓
-report to the main session directly;
-the report lists product paths + the commit so the main agent records them under `index update` products
-```
-
-**Never commit to main / the primary working tree's main branch** — reserved for the main agent's integration merges. **Commit-before-report is mandatory**: when a worktree exists, it is removed at T2, so anything uncommitted is destroyed.
+Moved to its own skill: **[skills/orch-lite-executor/SKILL.md](../skills/orch-lite-executor/SKILL.md)** — the executor-facing handbook (write-area selection, incremental commit discipline, commit-before-report, reporting format, fail-soft expectations). Executors are routed there by that skill's description gate; this file no longer duplicates the flow.
 
 ---
 
@@ -133,7 +100,7 @@ Parallelism is the default for independent work; serial is justified only by a N
 ### 7.2 Feature-reuse protocol
 1. **Reuse check**: `index show --feature-id <fid>` — feature exists → propose reusing `feature/<fid>`; new branch only for a genuinely new feature.
 2. **Context from the branch**: task #2+ reads background from the feature branch history (`git log`/`git diff`) + `index show --feature-id` products; the dispatch does NOT re-explain background.
-3. **Products survive T2**: committed to the feature branch BEFORE reporting (§5); the index `products` entry records paths/commit.
+3. **Products survive T2**: committed to the feature branch BEFORE reporting (executor handbook, commit discipline); the index `products` entry records paths/commit.
 
 ---
 
