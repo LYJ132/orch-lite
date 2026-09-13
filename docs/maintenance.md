@@ -15,6 +15,15 @@ Two supported installation paths (self-hosted marketplace; pick exactly one):
 
 ---
 
+## Platform support
+
+| Platform | Level | Notes |
+|---|---|---|
+| Claude Code / ZCode | Full | Hooks auto-register via the plugin manifest (`hooks/hooks.json`): SessionStart injection + dispatch-validate |
+| Codex | Skills-only degraded mode | Codex has no hook runner (`.codex-plugin/plugin.json` mirrors the superpowers precedent and carries `"hooks": {}`): no SessionStart injection — the main agent must invoke the skill explicitly; dispatch-validate is absent, so enforcement is model-layer discipline only (the six-rule MUST block + Supremacy clause still apply). The skill remains safe without hooks. |
+
+---
+
 ## Hooks
 
 | Hook | Event | Purpose |
