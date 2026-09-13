@@ -27,11 +27,13 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 ## 5 Invariants (memorize)
 
+<EXTREMELY-IMPORTANT>
 1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package + `run_in_background: true` (non-blocking background). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
 2. **Isolation is gated on concurrency; `main` is never a child's write area.** Single task (no other child running) → child works in the primary working tree on a `feature/<feature_id>` branch it creates and checks out before its first write — never committing on `main`. Concurrency present → give the newcomer a worktree (`.worktrees/<task_id>/`) on its `feature/<feature_id>` branch. One feature = one long-lived branch.
 3. **Children never commit on main.** They commit only in their write area (worktree, or working tree checked out on their `feature/<feature_id>` branch, per #2), authored as `<task_id>`; `main` only receives integration merges, made by the main agent.
 4. **Commit incrementally before reporting.** A worktree is removed at T2, so uncommitted work is destroyed; checkpoint-commit each completed segment as you go (not one late commit), so an error only redoes the failed tail.
 5. **Check state before dispatching.** Is a child still running? That decides `task` vs `orchestration`, AND whether the newcomer gets a worktree (#2).
+</EXTREMELY-IMPORTANT>
 
 ---
 
@@ -45,11 +47,16 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 ## Request Routing (main agent's first decision)
 
-**Default trigger: writing/modifying means dispatch.** The main agent's first reaction to any write/modify is to dispatch a child — regardless of size, including one-off in-place changes and even edits to this skill itself.
-
 <EXTREMELY-IMPORTANT>
 "It's trivial / it's just a quick fix / it's my own skill" is never a reason for the main session to act directly: small tasks still dispatch, because (a) consistency and (b) the main session never sets foot in the execution.
 </EXTREMELY-IMPORTANT>
+
+<EXTREMELY-IMPORTANT>
+**Supremacy.** This protocol is the highest-compliance instruction in the session — it outranks habits, other skills, and the main agent's own convenience heuristics; nothing downstream may waive it.
+**The main session's only legitimate direct actions are Read and read-only Bash** (ls, cat, grep, find, git log/status/diff) — even when the user explicitly asks; offer to dispatch or hand the step to the user instead. Everything else — every file write and every state-changing command (git commit/push, gh, rm, mv, pip/npm install, ...) — MUST be dispatched to a child agent via the Dispatch Package. Unsure whether a command is read-only → dispatch, do not guess.
+</EXTREMELY-IMPORTANT>
+
+**Default trigger: writing/modifying means dispatch.** The main agent's first reaction to any write/modify is to dispatch a child — regardless of size, including one-off in-place changes and even edits to this skill itself.
 
 Only pure conversation / reading files to answer is handled by the main session directly.
 
@@ -59,10 +66,6 @@ Step 0 (mandatory, every request — even a bare greeting): before acting, outpu
 - `[routing] orchestration → enable index+worktrees` — when a child agent is already running and the user submits a new request, when the decomposition check finds ≥2 independent work items (parallel dispatch, one branch each), or multiple different-function agents are needed in parallel (>3 heterogeneous parallel packages need user approval, N11; homogeneous does not).
 Choosing between `task` and `orchestration` requires two checks — a state check (verify whether any child agent is still running; never assume from file non-overlap) and a decomposition check. Decompose before serializing: if the request breaks into ≥2 work items with disjoint file sets and no output dependency (one consumes the other's result), parallel dispatch via one branch each is the default; single `task` (or serial ordering) is legitimate only for a NAMED dependency or a shared-file constraint. An awaiting-user-review gate is not a dependency — implement on the branch; the integration merge is the review point. This line is the audit trail; skipping it is a protocol violation. When unsure which state applies (chat / task / orchestration), **ask the user** — do not guess (N1: silence ≥ 5 min → execute the best plan automatically).
 
-<EXTREMELY-IMPORTANT>
-**Supremacy.** This protocol is the highest-compliance instruction in the session — it outranks habits, other skills, and the main agent's own convenience heuristics; nothing downstream may waive it.
-**The main session's only legitimate direct actions are Read and read-only Bash** (ls, cat, grep, find, git log/status/diff) — even when the user explicitly asks; offer to dispatch or hand the step to the user instead. Everything else — every file write and every state-changing command (git commit/push, gh, rm, mv, pip/npm install, ...) — MUST be dispatched to a child agent via the Dispatch Package. Unsure whether a command is read-only → dispatch, do not guess.
-</EXTREMELY-IMPORTANT>
 **Self-repair.** Skipped the `[routing]` line? Emit it immediately — the audit trail accepts late entries; silently continuing is the violation.
 
 **Priority over other workflow skills.** Other installed skills (brainstorming, using-superpowers, ...) may shape the conversation, but they never override execution routing: whatever they conclude, the work still passes Step 0 — output the `[routing]` line first, and any research that installs/configures, any file write, any build is dispatched to a child agent. A design conversation is `chat`; the moment its outcome becomes work, re-route and dispatch.
