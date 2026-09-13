@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-init.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-init.py\"",
             "shell": "bash",
             "async": false
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch-validate.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch-validate.py\"",
             "shell": "bash",
             "async": false
           }
