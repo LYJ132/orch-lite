@@ -238,8 +238,6 @@ ma = d / "multi-agent"
 for p in ("index.json", "memory/shared.json"):
     if not (ma / p).is_file():
         sys.exit(f"missing {p}")
-if not (ma / "comm").is_dir():
-    sys.exit("missing comm/")
 if not (d / ".git").exists():
     sys.exit("git not bootstrapped")
 mem = json.loads((ma / "memory" / "shared.json").read_text())
