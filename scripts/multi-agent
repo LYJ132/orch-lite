@@ -296,6 +296,8 @@ def index_create(args):
     }
     if args.feature_id:
         entry["feature_id"] = args.feature_id
+    if args.agent_id:
+        entry["agent_id"] = args.agent_id  # plain metadata: links the task to the platform agent/session that ran it
     tasks[args.task_id] = entry
     save_json(INDEX_FILE, index)
     feature_note = f", feature {args.feature_id}" if args.feature_id else ""
@@ -320,6 +322,8 @@ def index_update(args):
         task["output"] = args.output
     if args.products is not None:
         task["products"] = list(args.products)
+    if args.agent_id:
+        task["agent_id"] = args.agent_id  # plain metadata, no behavior change
     if args.status in TASK_TERMINAL_STATUSES and not task.get("completed_at"):
         task["completed_at"] = datetime.now().astimezone().isoformat()
 
@@ -344,7 +348,8 @@ def index_list(args):
     print("=== Task Index ===")
     for tid, t in tasks.items():
         feature = t.get("feature_id") or "-"
-        print(f"  {tid} | {t.get('role', '-')} | {feature} | {t.get('status', '-')}")
+        agent = t.get("agent_id") or "-"
+        print(f"  {tid} | {t.get('role', '-')} | {feature} | {t.get('status', '-')} | {agent}")
     return 0
 
 
@@ -1171,6 +1176,7 @@ def main():
     create_idx.add_argument("--feature-id", help="Feature this task belongs to (branch feature/<feature-id>)")
     create_idx.add_argument("--objective", help="Task objective")
     create_idx.add_argument("--criteria", nargs="*", help="Acceptance criteria (multiple allowed)")
+    create_idx.add_argument("--agent-id", help="Platform agent/session id that runs this task (plain metadata; enables continuation/reuse checks)")
 
     # index update (T2 status-update time point)
     update_idx = index_sub.add_parser("update", help="T2 status-update time point: update task status/products")
@@ -1178,6 +1184,7 @@ def main():
     update_idx.add_argument("--status", choices=["assigned", "running", "completed", "failed"], help="Task status")
     update_idx.add_argument("--output", help="Output summary")
     update_idx.add_argument("--products", nargs="*", help="Product paths (multiple allowed)")
+    update_idx.add_argument("--agent-id", help="Platform agent/session id that runs this task (plain metadata)")
 
     # index list (flat task list)
     index_sub.add_parser("list", help="Flat task list (task_id | role | feature_id | status)")
