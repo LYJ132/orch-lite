@@ -1,0 +1,14 @@
+{
+  "name": "orch-lite",
+  "owner": {
+    "name": "orch-lite"
+  },
+  "plugins": [
+    {
+      "name": "orch-lite",
+      "description": "Lightweight multi-agent orchestration skill.",
+      "source": "./",
+      "skills": "./skills/"
+    }
+  ]
+}
