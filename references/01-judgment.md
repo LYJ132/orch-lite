@@ -29,8 +29,8 @@ Different-function need → check existing products (index); yes → reference d
 ### 1.7 Report Completed Tasks in Order
 Independent: whoever finishes first is reported first. Dependent: judge per dependency whether it can be reported independently.
 
-### 1.8 Direct Communication First; Temp Doc Is Only a Fallback
-Normal: child reports directly to the main session. Abnormal (delivery not guaranteed): temp communication doc. After recovery: confirm content → clean up.
+### 1.8 Direct Communication First
+Normal: child reports directly to the main session. There is no fallback channel: task notifications and the platform's message delivery make one unnecessary — re-add one per principle 1.13 only if a real failure occurs.
 
 ### 1.9 The Index Carries Task State, Not Live Chit-Chat
 The index provides only: task status + usable products. It is not for real-time messaging / full history / experience store.
@@ -105,7 +105,7 @@ Level 0: Main agent
 | Commit BEFORE reporting | Products must be on the feature branch before the report — they must survive worktree removal at T2 |
 | Cross-function help | Heterogeneous needs → HELP_REQUEST to the main agent |
 | Homogeneous concurrency | Derive workers when needed (same-type only) |
-| Report | Direct to the main session; temp doc on failure |
+| Report | Direct to the main session |
 
 ### 4.2 Level 2 worker
 

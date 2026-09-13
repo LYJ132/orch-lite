@@ -10,8 +10,6 @@
 project root/                        ← primary working tree: main agent only (integration merges)
 ├── multi-agent/                    # runtime data (created by init)
 │   ├── index.json                  # index doc (Main Agent exclusive write)
-│   ├── comm/
-│   │   └── temp-*.json             # temp communication doc (fallback, auto-cleaned)
 │   └── memory/
 │       ├── .lock                   # flock target — held internally by the CLI during set/append
 │       └── shared.json             # shared memory (knowledge/patterns/experiences/contracts)
@@ -20,7 +18,7 @@ project root/                        ← primary working tree: main agent only (
 └── (project business code...)
 ```
 
-`init` auto-creates `index.json`=`{"tasks":{}}` (legacy `{"agents":...}` auto-migrates on load), `shared.json` (four sections), `comm/`, `memory/`; if the project has no git repo it also bootstraps one (`git init -b main` + baseline commit + `.gitignore` containing `multi-agent/` and `.worktrees/`).
+`init` auto-creates `index.json`=`{"tasks":{}}` (legacy `{"agents":...}` auto-migrates on load), `shared.json` (four sections), `memory/`; if the project has no git repo it also bootstraps one (`git init -b main` + baseline commit + `.gitignore` containing `multi-agent/` and `.worktrees/`).
 
 ---
 
