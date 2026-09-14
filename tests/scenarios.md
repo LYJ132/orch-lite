@@ -89,7 +89,10 @@ extracted verbatim from SKILL.md — single source of truth).
 
 **Expected behavior.** The main session runs a read-only `ls` itself and answers in-chat
 (expected truth: `pgdata` and `stacks`, both root-owned). Reading files to answer is the chat
-state even though the target is a directory. No `Agent`/`Task` tool call anywhere in the turn.
+state even though the target is a directory: an `ls` on one known path is a **narrow** read
+under Step 0's read-footprint gate (path known, a specific fact); only **wide sweeps** —
+unknown locations, many files, whole-directory scanning — escalate to a read-only explore
+child, so this turn must not. No `Agent`/`Task` tool call anywhere in the turn.
 
 **Verify.**
 

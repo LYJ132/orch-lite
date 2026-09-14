@@ -63,6 +63,8 @@ The dispatch prompt MUST embed the package as a fenced JSON block:
 
 **Beyond-workspace needs are tasks**: when work requires knowledge/data beyond the current workspace (web search, external APIs, external docs), the learning itself is dispatched to a `research-<id>` child which registers its product; the main session only reads what is already in the workspace.
 
+**Wide read sweeps are tasks too**: within the workspace, Step 0's read-footprint gate decides who reads — narrow reads (path known, ~≤3 files, a specific fact) the main session takes directly; wide sweeps (unknown locations, many files, whole-directory scanning) dispatch ONE read-only explore child (`run_in_background: true`) that returns **conclusions, not file dumps**. The explore child writes nothing — no worktree, branch, or commit — dispatch mechanics, not a fourth routing state. Narrow-read hygiene: batch independent read-only commands in parallel; `grep -n` to locate, then read only the needed range; recursive greps over large trees belong to the dispatched sweep, not the main session.
+
 ### 4.2 Field table
 | Field | Type | Req | Description |
 |---|---|---|---|
