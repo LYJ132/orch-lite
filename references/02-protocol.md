@@ -59,7 +59,7 @@ The dispatch prompt MUST embed the package as a fenced JSON block:
 
 **What the dispatch prompt carries**: the JSON block + **at most 3 lines of pointers** (paths/constraints). Never re-paste process text, contracts, feature background or memory — the child pulls those from files (index / memory / git log / SKILL.md); the standard flow (§5) is OWNED by this file, and repeating it per dispatch is drift. The main session never sends mid-flight messages to a running child.
 
-**Registry-first composition (MUST)**: before composing any dispatch, consult [agents.json](agents.json) (schema: [references/agents.md](references/agents.md)). If a named agent fits, the dispatch package injects ONLY the per-task deltas — `task_id`, this dispatch's `objective`, `acceptance_criteria` deltas, context pointers — plus the registry `id`; the full binding-rules preamble is NOT re-derived (the named agent's standing behavior and `standard_acceptance` live in the registry). Every dispatch package's first instruction to the child is: `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`. No registry fit → compose the full template as before. The registry refines dispatch composition only — routing (three states, 5 invariants) is unchanged.
+**Registry-first composition (MUST)**: before composing any dispatch, consult the **root `agents.json`** ([agents.json](agents.json)) (schema: [references/agents.md](references/agents.md)). If a named agent fits, the dispatch package injects ONLY the per-task deltas — `task_id`, this dispatch's `objective`, `acceptance_criteria` deltas, context pointers — plus the registry `id`; the full binding-rules preamble is NOT re-derived (the named agent's standing behavior and `standard_acceptance` live in the registry). Every dispatch package's first instruction to the child is: `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`. No registry fit → compose the full template as before. The registry refines dispatch composition only — routing (three states, 5 invariants) is unchanged.
 
 **Child death**: a child that stops or fails is re-dispatched under a new task_id or reported to the user — the main session never absorbs the work itself.
 
@@ -118,7 +118,7 @@ Parallelism is the default for independent work; serial is justified only by a N
 | Trigger threshold | **only** when a problem cost unusual time/energy to crack | any condensed recurring law / flow that avoids a high-frequency problem |
 | Storage | `shared.json` `experiences[]` | `shared.json` `contracts[]` |
 
-Write via `memory append --array experiences|contracts --entry <JSON>`; the CLI takes an internal flock on `multi-agent/memory/.lock` (N17).
+Write via `memory append --array experiences|contracts --entry <JSON>`; the CLI takes an internal flock on `.orch-lite/memory.lock` (N17).
 
 **Reading rule (the other half of the loop — hidden cost if skipped)**: memory written but never read is sunk cost. Any agent — child or main — **when hitting a hard / non-obvious problem, read `experiences` first** before re-deriving from scratch. Dispatch context tells the child where to look (§5); the main agent is reminded in SKILL.md.
 

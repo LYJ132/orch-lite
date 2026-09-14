@@ -67,7 +67,7 @@ clear`), `--- Request Routing (from SKILL.md) ---`, and `--- Dispatch Package (M
 
 ```bash
 # from anywhere: init bootstrapped the runtime next to wherever session A was opened
-ls ~/multi-agent/          # index.json  memory/
+ls ~/.orch-lite/          # index.json  memory.json
 ```
 
 In-session: check the exact markers above are present (the two `(from SKILL.md)` sections are

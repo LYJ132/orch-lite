@@ -8,7 +8,7 @@
 
 ```
 project root/                        ← primary working tree: main agent only (integration merges)
-├── multi-agent/                    # runtime data (created by init)
+├── .orch-lite/                     # runtime data (created by init)
 │   ├── index.json                  # index doc (Main Agent exclusive write)
 │   └── memory/
 │       ├── .lock                   # flock target — held internally by the CLI during set/append
@@ -18,7 +18,7 @@ project root/                        ← primary working tree: main agent only (
 └── (project business code...)
 ```
 
-`init` auto-creates `index.json`=`{"tasks":{}}` (legacy `{"agents":...}` auto-migrates on load), `shared.json` (four sections), `memory/`; if the project has no git repo it also bootstraps one (`git init -b main` + baseline commit + `.gitignore` containing `multi-agent/` and `.worktrees/`).
+`init` auto-creates `index.json`=`{"tasks":{}}` (legacy `{"agents":...}` auto-migrates on load), `memory.json` (four sections); if the project has no git repo it also bootstraps one (`git init -b main` + baseline commit + `.gitignore` containing `multi-agent/`, `.orch-lite/` and `.worktrees/`).
 
 ---
 
@@ -81,7 +81,7 @@ Worktree isolation prevents concurrent edits from colliding; integration conflic
 
 ---
 
-## 4. memory/shared.json — Shared Memory
+## 4. memory.json — Shared Memory
 
 | Property | Value |
 |---|---|
@@ -89,7 +89,7 @@ Worktree isolation prevents concurrent edits from colliding; integration conflic
 | Writer | main + all child agents |
 | Sections | `common_knowledge{}` / `task_patterns{}` / `experiences[]` / `contracts[]` |
 
-**Write convention (N17)**: the CLI takes an internal flock on `multi-agent/memory/.lock` during `memory set`/`append` — just call the CLI; no manual lock claim/release.
+**Write convention (N17)**: the CLI takes an internal flock on `.orch-lite/memory.lock` during `memory set`/`append` — just call the CLI; no manual lock claim/release.
 
 ---
 
@@ -97,7 +97,7 @@ Worktree isolation prevents concurrent edits from colliding; integration conflic
 
 | Command | User | Purpose |
 |---|---|---|
-| `init` | anyone | create `multi-agent/` structure (+ git bootstrap when absent) |
+| `init` | anyone | create `.orch-lite/` structure (+ git bootstrap when absent) |
 | `index create --task-id --role [--feature-id] [--objective] [--criteria ...]` | Main, T1 | flat task entry, status=assigned |
 | `index update --task-id [--status --output --products]` | Main, T2 | update status/output/products (completed/failed → completed_at) |
 | `index list` | anyone | flat task list (`task_id \| role \| feature_id \| status`) |
@@ -125,7 +125,7 @@ multi-agent worktree remove --task-id impl-20260911-01
 
 ## 6. Git Ignore (what `init` creates/appends)
 ```gitignore
-multi-agent/
+.orch-lite/
 .worktrees/
 ```
-`multi-agent/` and `.worktrees/` are not committed; `init` appends missing lines only.
+`.orch-lite/` and `.worktrees/` are not committed; `init` appends missing lines only.

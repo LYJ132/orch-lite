@@ -50,7 +50,7 @@ Routing default (Step 0's decomposition check): for independent work — ≥2 wo
 This is a "blunt" gate: it cannot see *which file* another child is writing, so concurrent-but-disjoint tasks are still worktreed. That over-isolation is one cheap `git worktree add`; the alternative (a per-file occupancy table that lets us know exactly who holds which file) is precisely the `files`/`git` occupancy tracking we retired — not worth the lifecycle cost. Zero new mechanism.
 
 ### 1.12 Shared Resources Are Protected by Mechanisms, Not Memory
-- Shared-memory writes are serialized by a flock the CLI takes internally on `multi-agent/memory/.lock`; agents just call the CLI
+- Shared-memory writes are serialized by a flock the CLI takes internally on `.orch-lite/memory.lock`; agents just call the CLI
 
 ### 1.13 Experiences Are Cast Directly Into Contracts
 No separate SOP layer. Record-time decision (N18): if it can be condensed into a "must-follow" rule/flow → contract; one-off → experience; **unsure → ask the user**.

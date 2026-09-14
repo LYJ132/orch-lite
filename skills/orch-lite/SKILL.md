@@ -40,7 +40,7 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 - Main dispatches a child; the child commits as `<task_id>` in its write area — the primary working tree checked out on its `feature/<feature_id>` branch (solo) or `.worktrees/<task_id>/` (concurrency).
 - One long-lived `feature/<feature_id>` branch per feature; integration is the main agent merging into `main` (never a child).
-- `multi-agent/index.json` tracks tasks: `task_id → role/status/products`.
+- `.orch-lite/index.json` tracks tasks: `task_id → role/status/products`.
 
 ---
 
@@ -83,7 +83,7 @@ Every dispatch prompt has exactly four parts, in order:
    > 1. You MUST do all work with your own tools; you MUST NOT dispatch or derive further agents.
    > 2. You MUST work only in the workspace named for you — per concurrency state (no other task running → the working tree on a `feature/<feature_id>` branch you create first; a task already running → `.worktrees/<task_id>/`) — MUST NOT commit on main (`main` only receives integration merges by the main agent), and MUST NOT write outside it.
    > 3. You MUST commit incrementally, authored as `<task_id>`, and always before reporting.
-   > 4. You MUST check `multi-agent/memory/shared.json` and the index before re-deriving anything non-obvious.
+   > 4. You MUST check `.orch-lite/memory.json` and the index before re-deriving anything non-obvious.
    > 5. You MUST follow every entry in memory `contracts[]`.
    > 6. You MUST report `TASK_COMPLETED` + summary + commit hash on success, and a structured failure report otherwise; you MUST NOT go silent.
 3. **Fenced-JSON package** (N15: 4 required fields + optional `feature_id`):
@@ -94,7 +94,7 @@ Every dispatch prompt has exactly four parts, in order:
 
 <EXTREMELY-IMPORTANT>
 **Registry-first composition (MUST):**
-- **Before composing any dispatch, consult [agents.json](agents.json)** (schema + how to add entries: [references/agents.md](references/agents.md)). If a named agent fits the work, the dispatch package injects ONLY the per-task deltas — `task_id`, this dispatch's `objective`, `acceptance_criteria` deltas, context pointers — plus the registry `id`; the full binding-rules preamble is NOT re-derived (the named agent's standing behavior and `standard_acceptance` live in the registry).
+- **Before composing any dispatch, consult the root registry [agents.json](agents.json) (schema + how to add entries: [references/agents.md](references/agents.md)). If a named agent fits the work, the dispatch package injects ONLY the per-task deltas — `task_id`, this dispatch's `objective`, `acceptance_criteria` deltas, context pointers — plus the registry `id`; the full binding-rules preamble is NOT re-derived (the named agent's standing behavior and `standard_acceptance` live in the registry).
 - **Every dispatch package's first instruction to the child is:** `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`. No fit in the registry → compose the full template above as before.
 </EXTREMELY-IMPORTANT>
 
@@ -143,7 +143,7 @@ Full parameters: `./scripts/multi-agent <group> --help` or [references/03-state.
 
 ## Memory (read before you re-derive, write when it cost you)
 
-- **Reading is the other half of the loop.** Facing a hard / non-obvious problem (main or a child)? Stop and read `multi-agent/memory/shared.json` `experiences` before re-solving from scratch — a recorded solution is already paid for. Then, at dispatch, point the child at it (executor handbook, "Standard Flow").
+- **Reading is the other half of the loop.** Facing a hard / non-obvious problem (main or a child)? Stop and read `.orch-lite/memory.json` `experiences` before re-solving from scratch — a recorded solution is already paid for. Then, at dispatch, point the child at it (executor handbook, "Standard Flow").
 - **Writing threshold**: record an **experience only** when a problem genuinely cost unusual time/energy to crack (not every hiccup). Condensable into a must-follow rule → **contract** instead. Unsure → ask the user.
 
 ---

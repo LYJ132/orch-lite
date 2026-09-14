@@ -299,10 +299,10 @@ def build_context() -> str:
     parts = ["[orch-lite]"]
     for label, section in contract_sections():
         parts.append(f"--- {label} (from SKILL.md) ---\n{section}")
-    parts.append(GATE_NOTICE)
+    parts.append("--- Dispatch gate (hook-enforced) ---\n" + GATE_NOTICE)
     bootstrap_lines = bootstrap_runtime()
     if bootstrap_lines:
-        parts.append("\n".join(bootstrap_lines))
+        parts.append("--- Bootstrap (hook) ---\n" + "\n".join(bootstrap_lines))
     parts.append(
         _render_cli("Bootstrap", ["init"], "(no output)", code, init_out)
     )

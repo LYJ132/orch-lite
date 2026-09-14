@@ -36,6 +36,13 @@ re-sent with the fenced block. Calls whose `run_in_background` is not exactly
 `true` are also **DENIED** — dispatches must be background so the main
 session returns to the user immediately.
 
+v5 dispatch gate (same block-and-re-send loop): the package must carry a
+`registry` field — a registered id from the root `agents.json`, or explicit
+`null` with a `registry_reason` string — and the prompt must tell the child
+to read `skills/orch-lite-executor/SKILL.md` first. Missing/corrupt
+agents.json (only consulted when a registry id is named) denies with a
+message pointing at the session-start recreate or manual restore.
+
 Enforces N15 (amended): a dispatch must carry 4 required fields
 (`task_id` / `role` / `objective` / `acceptance_criteria`); the optional
 `feature_id` must match `^[a-z0-9][a-z0-9._-]*$` (it names the
@@ -56,6 +63,13 @@ ignored when present.
 | 1.10 | fenced JSON + valid `feature_id: "payment"` + background | exit 0, empty stdout | ✅ |
 | 1.11 | valid fenced JSON but `run_in_background` absent | exit 2, stderr: `Dispatches must run in the background (run_in_background=true) so the main session returns to the user immediately; re-send with run_in_background set to exactly true` | ✅ |
 | 1.12 | valid fenced JSON but `run_in_background: false` | exit 2 (foreground reason on stderr, as 1.11) | ✅ |
+| 1.13 | fenced JSON without a `registry` field | exit 2, stderr names the missing field and the null+`registry_reason` alternative | ✅ |
+| 1.14 | fenced JSON with `registry: "no-such-agent"` (not in agents.json) | exit 2, stderr lists the valid ids | ✅ |
+| 1.15 | prompt without the handbook-first instruction (no `skills/orch-lite-executor/SKILL.md` line) | exit 2, stderr names the handbook path | ✅ |
+| 1.16 | `registry: null` without a `registry_reason` string | exit 2, stderr asks for the reason string | ✅ |
+| 1.17 | `registry: "integrator"` but no `agents.json` in the project cwd | exit 2, stderr: next session start recreates it from the bundled default, or restore manually | ✅ |
+| 1.18 | `registry: "integrator"` but agents.json is corrupt | exit 2, same recreate/restore help as 1.17 | ✅ |
+| 1.19 | `registry: "integrator"` (valid id) + handbook-first line | exit 0, empty stdout | ✅ |
 
 Hard enforcement (1.4, 1.7, 1.11–1.12) is the v3 design point: the fenced
 block is the only dispatch marker that actually reaches the hook, and its
@@ -124,8 +138,8 @@ line with exit 0 — the hook never crashes the session.
 
 | # | Setup | Expected | Actual |
 |---|---|---|---|
-| 3.1 | fresh project, no `multi-agent/` | creates the full tree (`index.json`, `memory/shared.json`; git bootstrapped when repo-less); all four memory sections present, index shows `Index is empty`, Health shows `doctor: all clear` | ✅ |
-| 3.2 | project with a populated index / existing `multi-agent/` | re-runs init idempotently (no overwrite), shows the flat task list, injects the Request Routing section, Health reflects doctor (e.g. stale/dirty findings) | ✅ |
+| 3.1 | fresh project, no `.orch-lite/` | creates the full tree (`index.json`, `memory.json`; git bootstrapped when repo-less); all four memory sections present, index shows `Index is empty`, Health shows `doctor: all clear` | ✅ |
+| 3.2 | project with a populated index / existing `.orch-lite/` | re-runs init idempotently (no overwrite), shows the flat task list, injects the Request Routing section, Health reflects doctor (e.g. stale/dirty findings) | ✅ |
 | 3.3 | SKILL.md without a "## Request Routing" section | graceful fallback line "(contract section missing in SKILL.md)" in additionalContext for that section, no crash (exit 0), init + index + Health still work | ✅ |
 | 3.4 | CLI copy predating the doctor subcommand | Health skipped silently (graceful-absence probe), the other sections intact, exit 0 | ✅ |
 | 3.5 | SKILL.md with all three contract sections (current shape) | additionalContext contains "--- 5 Invariants (memorize) (from SKILL.md) ---", "--- Request Routing (from SKILL.md) ---" and "--- Dispatch Package (MUST template) (from SKILL.md) ---", each section byte-identical to the SKILL.md text (verified programmatically: `extract_contract` output vs the slice between headings) | ✅ |

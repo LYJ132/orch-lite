@@ -2,7 +2,7 @@
 # tests/run.sh — executable counterpart of the manual matrix in tests/hooks.md.
 #
 # Self-contained: no network, no writes outside mktemp -d sandboxes (negative
-# paths never touch the real multi-agent/ runtime state; running session-init
+# paths never touch the real .orch-lite/ runtime state; running session-init
 # inside the repo is idempotent by design — init creates-if-missing, list and
 # doctor are pure reads).
 #
@@ -117,10 +117,26 @@ print(json.dumps({"tool_name": tool_name, "tool_input": ti}))
 PY
 }
 
-PKG_OK='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"]}'
+PKG_OK='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": null, "registry_reason": "no registered agent fits a probe"}'
 
-fenced_prompt() {  # $1=fenced payload content
+# Handbook-first line every dispatch prompt must carry (v5 gate).
+HANDBOOK_LINE='MANDATORY FIRST ACTION: read skills/orch-lite-executor/SKILL.md (your handbook).'
+
+fenced_prompt() {  # $1=fenced payload content; appends the handbook-first line
+  printf 'context line\n\n```json\n%s\n```\n\n%s\n' "$1" "$HANDBOOK_LINE"
+}
+
+fenced_prompt_nohb() {  # same, WITHOUT the handbook-first line (gate-negative)
   printf 'context line\n\n```json\n%s\n```\n' "$1"
+}
+
+# Run dispatch-validate from a different cwd (the gate resolves agents.json
+# from the process cwd = project root, exactly like in a live session).
+dv_run_in() {  # $1=cwd, $2=event json
+  ( cd "$1" && printf '%s' "$2" | python3 "$SKILL_DIR/hooks/dispatch-validate.py" 2>"$DV_ERR_FILE" )
+  DV_RC=$?
+  DV_STDOUT=""
+  DV_STDERR="$(cat "$DV_ERR_FILE")"
 }
 
 # --- frontmatter ---
@@ -167,7 +183,7 @@ case_1_5() {
 }
 
 case_1_6() {
-  local pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"instance_id\": \"retired-ignorer\"}"
+  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "instance_id": "retired-ignorer", "registry": null, "registry_reason": "probe"}'
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
 }
@@ -201,7 +217,7 @@ case_1_9() {
 }
 
 case_1_10() {
-  local pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"feature_id\": \"payment\"}"
+  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "payment", "registry": null, "registry_reason": "probe"}'
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
 }
@@ -214,6 +230,67 @@ case_1_11() {
 case_1_12() {
   dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" false)"
   expect_deny "run_in_background"
+}
+
+# --- v5 dispatch gate: registry field + handbook-first instruction ---
+
+case_1_13() {
+  # registry field missing -> deny naming exactly what to add
+  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"]}'
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "registry"
+  case "$DV_STDERR" in *registry_reason*) : ;; *) printf 'deny must name the null+reason alternative\n'; return 1 ;; esac
+}
+
+case_1_14() {
+  # registered id that is not in agents.json -> deny listing valid ids
+  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": "no-such-agent"}'
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "not in agents.json"
+  case "$DV_STDERR" in *integrator*) : ;; *) printf 'deny must list valid ids\n'; return 1 ;; esac
+}
+
+case_1_15() {
+  # no handbook-first instruction -> deny
+  dv_run "$(agent_event Agent "$(fenced_prompt_nohb "$PKG_OK")" true)"
+  expect_deny "handbook-first instruction"
+  case "$DV_STDERR" in *skills/orch-lite-executor/SKILL.md*) : ;; *) printf 'deny must name the handbook path\n'; return 1 ;; esac
+}
+
+case_1_16() {
+  # registry null without a registry_reason string -> deny
+  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": null}'
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "registry_reason"
+}
+
+case_1_17() {
+  # agents.json missing in the project cwd -> deny with recreate/restore help
+  local d pkg
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": "integrator"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "missing or corrupt"
+  case "$DV_STDERR" in *"recreates it"*|*"restore it manually"*) : ;; *) printf 'deny must explain recreate/restore\n'; return 1 ;; esac
+}
+
+case_1_18() {
+  # agents.json corrupt -> deny with recreate/restore help
+  local d pkg
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  printf 'not json {{{' > "$d/agents.json"
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": "integrator"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "missing or corrupt"
+}
+
+case_1_19() {
+  # registered id + handbook line -> allow (repo root agents.json, cwd = repo)
+  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": "integrator"}'
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
 }
 
 # Fail-soft audit probe: structurally broken tool_input payloads must yield
@@ -234,13 +311,13 @@ case_3_1() {
   python3 - "$d" <<'PY'
 import json, sys, pathlib
 d = pathlib.Path(sys.argv[1])
-ma = d / "multi-agent"
-for p in ("index.json", "memory/shared.json"):
+ma = d / ".orch-lite"
+for p in ("index.json", "memory.json"):
     if not (ma / p).is_file():
         sys.exit(f"missing {p}")
 if not (d / ".git").exists():
     sys.exit("git not bootstrapped")
-mem = json.loads((ma / "memory" / "shared.json").read_text())
+mem = json.loads((ma / "memory.json").read_text())
 for key in ("common_knowledge", "experiences", "task_patterns", "contracts"):
     assert key in mem, f"memory lacks {key}"
 ctx = json.loads((d / "o.json").read_text())["additionalContext"]
@@ -461,7 +538,7 @@ case_doctor() {
   # DIRECTLY on main surfaces as main-violation; the same commit reaching main
   # through the main agent's --no-ff merge (second parent) must NOT — the scan
   # is first-parent. doctor always exits 0. Sandboxes are mktemp -d, fully
-  # independent of this repo's history and multi-agent/ state.
+  # independent of this repo's history and .orch-lite/ state.
   local dir out
 
   # (a) direct task commit on main -> violation
@@ -469,7 +546,7 @@ case_doctor() {
   TMP_DIRS+=("$dir")
   git -C "$dir" init -q -b main || return 1
   git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
-  mkdir -p "$dir/multi-agent" && printf '{"tasks": {}}' > "$dir/multi-agent/index.json" || return 1
+  mkdir -p "$dir/.orch-lite" && printf '{"tasks": {}}' > "$dir/.orch-lite/index.json" || return 1
   git -C "$dir" -c user.name=ops-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work committed on main" || return 1
   out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
@@ -480,7 +557,7 @@ case_doctor() {
   TMP_DIRS+=("$dir")
   git -C "$dir" init -q -b main || return 1
   git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
-  mkdir -p "$dir/multi-agent" && printf '{"tasks": {}}' > "$dir/multi-agent/index.json" || return 1
+  mkdir -p "$dir/.orch-lite" && printf '{"tasks": {}}' > "$dir/.orch-lite/index.json" || return 1
   git -C "$dir" checkout -q -b feature/demo || return 1
   git -C "$dir" -c user.name=impl-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work on feature branch" || return 1
   git -C "$dir" checkout -q main || return 1
@@ -502,9 +579,9 @@ case_doctor_drift() {
   root="$(mktemp -d)" || return 1
   TMP_DIRS+=("$root")
   dir="$root/repo"; copy="$root/copy"
-  mkdir -p "$dir"/{hooks,references,scripts,tests} "$copy" "$dir/multi-agent" || return 1
+  mkdir -p "$dir"/{hooks,references,scripts,tests} "$copy" "$dir/.orch-lite" || return 1
   printf '# skill\n' > "$dir/SKILL.md"
-  printf 'multi-agent/\n.worktrees/\n' > "$dir/.gitignore"
+  printf '.orch-lite/\n.worktrees/\n' > "$dir/.gitignore"
   printf 'print("hook")\n' > "$dir/hooks/session-init.py"
   printf '# state\n' > "$dir/references/03-state.md"
   cp "$SKILL_DIR/scripts/multi-agent" "$dir/scripts/multi-agent" || return 1   # the gate wants a skill-shaped HEAD
@@ -513,7 +590,7 @@ case_doctor_drift() {
   git -C "$dir" init -q -b main || return 1
   git -C "$dir" add -A || return 1
   git -C "$dir" -c user.name=t -c user.email=t@l commit -qm base || return 1
-  printf '{"tasks": {}}' > "$dir/multi-agent/index.json" || return 1
+  printf '{"tasks": {}}' > "$dir/.orch-lite/index.json" || return 1
   cp -r "$dir/hooks" "$dir/references" "$dir/scripts" "$dir/tests" "$dir/SKILL.md" "$dir/.gitignore" "$copy/" || return 1
 
   # (a) identical copy -> no drift finding
@@ -555,9 +632,9 @@ case_doctor_drift() {
   # path; a plugin-form copy matches the same way.
   local prepo pcopy2
   prepo="$root/prepo"; pcopy2="$root/pcopy"
-  mkdir -p "$prepo"/{hooks,references,scripts,tests,skills/orch-lite} "$prepo/multi-agent" "$pcopy2" || return 1
+  mkdir -p "$prepo"/{hooks,references,scripts,tests,skills/orch-lite} "$prepo/.orch-lite" "$pcopy2" || return 1
   printf '# skill\n' > "$prepo/skills/orch-lite/SKILL.md"
-  printf 'multi-agent/\n.worktrees/\n' > "$prepo/.gitignore"
+  printf '.orch-lite/\n.worktrees/\n' > "$prepo/.gitignore"
   printf 'print("hook")\n' > "$prepo/hooks/session-init.py"
   printf '# state\n' > "$prepo/references/03-state.md"
   cp "$SKILL_DIR/scripts/multi-agent" "$prepo/scripts/multi-agent" || return 1
@@ -565,7 +642,7 @@ case_doctor_drift() {
   git -C "$prepo" init -q -b main || return 1
   git -C "$prepo" add -A || return 1
   git -C "$prepo" -c user.name=t -c user.email=t@l commit -qm base || return 1
-  printf '{"tasks": {}}' > "$prepo/multi-agent/index.json" || return 1
+  printf '{"tasks": {}}' > "$prepo/.orch-lite/index.json" || return 1
   cp -r "$prepo/hooks" "$prepo/references" "$prepo/scripts" "$prepo/tests" "$prepo/.gitignore" "$pcopy2/" || return 1
   cp "$prepo/skills/orch-lite/SKILL.md" "$pcopy2/SKILL.md" || return 1
 
@@ -681,6 +758,13 @@ run_case "1.9    Task alias + valid package -> allow"     case_1_9
 run_case "1.10   branch-safe feature_id -> allow"         case_1_10
 run_case "1.11   background absent -> deny"               case_1_11
 run_case "1.12   run_in_background=false -> deny"         case_1_12
+run_case "1.13   registry field missing -> deny"          case_1_13
+run_case "1.14   unknown registry id -> deny"             case_1_14
+run_case "1.15   handbook-first missing -> deny"          case_1_15
+run_case "1.16   registry null w/o reason -> deny"        case_1_16
+run_case "1.17   agents.json missing -> deny + help"      case_1_17
+run_case "1.18   agents.json corrupt -> deny + help"      case_1_18
+run_case "1.19   registered id + handbook -> allow"       case_1_19
 run_case "audit  dispatch-validate broken shapes"         case_1_audit_shapes
 run_case "3.1    fresh project bootstrap (temp copy)"     case_3_1
 run_case "3.2    populated index injected (temp copy)"    case_3_2
