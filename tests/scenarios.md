@@ -19,7 +19,7 @@ cases the skill does not define; record what you observe.
 | Session | Open in | Acts | Why |
 |---|---|---|---|
 | A (fresh) | `~` (any non-repo directory) | 0 → 1 → 2 → 3 → 4 → 5 | routing against out-of-repo targets; act 1 must be the first message of a fresh session (SessionStart fires once) |
-| B (fresh) | `~/.zcode/skills/orch-lite` | 6 → 7 | repo-internal work: feature branches, worktrees, integration merges, hook enforcement |
+| B (fresh) | `~/.zcode/skills/orch-lite` | 6 → 7 → 10 | repo-internal work: feature branches, worktrees, integration merges, hook enforcement |
 | C (or continue B) | any | 8 → 9 | destructive finale, then the closing audit (act 9 is a plain shell, no ZCode needed) |
 
 - One act at a time, in order; each act's expectations assume the previous ones ran.
@@ -379,6 +379,39 @@ Notes on honest judging:
 
 **Pass** — index all-completed, no new doctor findings, no task_id-authored first-parent commits, no worktree leftovers, remote matches local within the stated delta. **Fail** — any stuck index entry, any new doctor finding, any direct-to-main task commit, or a local/remote mismatch beyond that delta.
 
+## Act 10 — Owner-configured integrator dispatch composes from the registry (delta-only)
+
+**Purpose.** Prove the named-agent registry (`references/agents.json`) changes dispatch **composition**: a recurring role (the `integrator`) is dispatched with only per-task deltas plus the registry id — the full binding-rules preamble is not re-derived — and the child is pointed at its handbook first.
+
+**Setup.** The owner has added an `integrator` entry to `references/agents.json` (id, role `ops`, purpose, `standard_acceptance`) — see `references/agents.md` for the how-to.
+
+**User's input** (session B, repo-internal, with all feature tasks of some feature completed):
+
+```
+用 agents.json 里注册的 integrator 把 <fid> 的分支合入 main，跑全套测试，关掉索引条目，清理 worktree
+```
+
+**Expected routing line.** First line: `[routing] task → single dispatch to ops-<id> (run_in_background=true)` — a single integration package; no orchestration machinery for the dispatch itself (index/worktree teardown is the dispatched work).
+
+**Expected behavior.** The main agent consults `references/agents.json` before composing. The dispatch package carries:
+
+- identity line + the standard abbreviated MUST block (NOT a re-derived, integrator-specific preamble);
+- the fenced-JSON package with this task's `task_id`, `role: ops`, the per-dispatch `objective` (merge `<fid>`, test, close index, tear down worktrees), any `acceptance_criteria` **deltas** beyond the registry's `standard_acceptance`, and at most 3 context-pointer lines — the registry's standing acceptance checks are NOT re-pasted;
+- as its **first instruction to the child**: `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`.
+
+The child then performs the integration (branch identity check, merge onto main, suite, index closeout, worktree teardown) per the registry entry, and the three routing states / 5 invariants are visibly unchanged — no fourth state, no new routing line shape.
+
+**Verify.**
+
+```bash
+repo$ python3 -c "import json; print([a['id'] for a in json.load(open('references/agents.json'))['agents']])"
+# -> includes 'integrator'
+```
+
+Plus the transcript: the package is delta-only (no registry acceptance checks re-pasted, no integrator preamble re-derived) and its first child-facing instruction is the handbook pointer. Integration lands per the registry's `standard_acceptance` (suite passes, index entry completed, worktree gone).
+
+**Pass** — registry consulted (delta-only package + registry id), handbook-first line present, routing states/invariants untouched. **Fail** — a full re-derived preamble, registry acceptance checks re-pasted into the package, no handbook pointer, or any change to the three-state routing.
+
 ## Run log
 
 | Act | Result (PASS / FAIL / N/A) | Observed routing line | Notes (probe observations, timings) |
@@ -393,3 +426,4 @@ Notes on honest judging:
 | 7 | | | gate: impl-20260912-07 integrated? |
 | 8 | | | probe (b): |
 | 9 | | — | |
+| 10 | | | registry: integrator entry present? |
