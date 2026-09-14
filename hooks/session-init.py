@@ -78,7 +78,7 @@ SKILL_MD = next(
 # sections (Bootstrap / Agent Index / Health), which render last.
 CONTRACT_SECTIONS = (
     ("## 5 Invariants (memorize)", "5 Invariants (memorize)"),
-    ("## Request Routing", "Request Routing"),
+    ("## Request Routing (main agent's first decision)", "Request Routing"),
     ("## Dispatch Package (MUST template)", "Dispatch Package (MUST template)"),
 )
 MISSING_CONTRACT = "(contract section missing in SKILL.md)"
@@ -217,7 +217,7 @@ def extract_contract(heading_prefix: str, lines: List[str]) -> str:
 def contract_sections() -> List[Tuple[str, str]]:
     """(label, verbatim section text) pairs for every CONTRACT_SECTIONS entry."""
     try:
-        lines = SKILL_MD.read_text().splitlines()
+        lines = SKILL_MD.read_text(encoding="utf-8").splitlines()
     except Exception:
         lines = []
     return [
@@ -252,9 +252,19 @@ def build_context() -> str:
 
 
 def main() -> int:
-    read_stdin_event()  # consume the event payload; content not needed
+    event = read_stdin_event()  # consume the event payload; content not needed
     try:
-        print(json.dumps({"additionalContext": build_context()}))
+        context = build_context()
+        if event.get("hook_event_name") == "SessionStart":
+            payload = {
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": context,
+                }
+            }
+        else:
+            payload = {"additionalContext": context}
+        print(json.dumps(payload))
     except Exception:
         # Last-resort degradation: never crash the session.
         try:

@@ -15,7 +15,7 @@ A running task ≠ the user must wait. After dispatching, the main agent ends it
 - The main agent does **not**: wait long for a child, do concrete work, keep agents alive between dispatches.
 
 ### 1.3 Recover System State, Not Full Context
-On any event, read only the minimal state relevant to it (index + worktrees + related dispatch), process, end the turn. Do not reload past conversations / all tasks / full agent context.
+On any event, read only the minimal state relevant to it (index + worktrees + related dispatch), process, end the turn. Do not reload past conversations / all tasks / full agent context. The same minimalism governs file reads, gated by footprint per Step 0 (SKILL.md): the main session handles narrow reads (path known, a specific fact) itself; wide sweeps of unknown locations / many files go to one read-only explore child — it writes nothing, so no worktree, branch, or commit.
 
 ### 1.4 Agents Are Limited to Three Layers
 Level 0 main / Level 1 child executor / Level 2 worker (homogeneous concurrency only). Level 2 deriving Level 3 is forbidden.

@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-init.py\"",
-            "shell": "bash",
+            "commandWindows": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/session-init.py\"",
             "async": false
           }
         ]
@@ -14,12 +14,12 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Agent|Task",
+        "matcher": "spawn_agent|Agent|Task",
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch-validate.py\"",
-            "shell": "bash",
+            "commandWindows": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch-validate.py\"",
             "async": false
           }
         ]

@@ -1,6 +1,6 @@
 {
   "name": "orch-lite",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Lightweight multi-agent orchestration skill. Routes every request into one of three states - chat, single background dispatch, or index+worktree orchestration - so the main agent only coordinates while all file-modifying work runs in background child agents. Use when a request involves writing or modifying files, git/build operations, or coordinating multiple child agents.",
   "author": {
     "name": "linyujian"
