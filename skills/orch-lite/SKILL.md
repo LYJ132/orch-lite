@@ -92,6 +92,14 @@ Every dispatch prompt has exactly four parts, in order:
    ```
 4. **Context pointers — at most 3 lines**, and only file-unreachable facts (decisions, constraints, paths that exist nowhere on disk). Secrets are read-never-print: never inline a secret in a dispatch. Never re-paste process text — the child pulls everything file-reachable from SKILL.md / references / memory / git log.
 
+<EXTREMELY-IMPORTANT>
+**Registry-first composition (MUST):**
+- **Before composing any dispatch, consult [references/agents.json](references/agents.json)** (schema + how to add entries: [references/agents.md](references/agents.md)). If a named agent fits the work, the dispatch package injects ONLY the per-task deltas — `task_id`, this dispatch's `objective`, `acceptance_criteria` deltas, context pointers — plus the registry `id`; the full binding-rules preamble is NOT re-derived (the named agent's standing behavior and `standard_acceptance` live in the registry).
+- **Every dispatch package's first instruction to the child is:** `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`. No fit in the registry → compose the full template above as before.
+</EXTREMELY-IMPORTANT>
+
+The registry refines dispatch **composition** only — routing is untouched: the three states and the 5 invariants above stay exactly as written.
+
 ---
 
 ## Main Agent Action Table
