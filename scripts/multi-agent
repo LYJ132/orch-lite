@@ -63,14 +63,14 @@ except ImportError:  # non-POSIX platform: degrade to lock-free behavior with a 
 
 # Constants
 PROJECT_ROOT = Path.cwd()
-MULTI_AGENT_DIR = PROJECT_ROOT / "multi-agent"
+MULTI_AGENT_DIR = PROJECT_ROOT / ".orch-lite"
 INDEX_FILE = MULTI_AGENT_DIR / "index.json"
 MEMORY_FILE = MULTI_AGENT_DIR / "memory" / "shared.json"
 MEMORY_LOCK_FILE = MULTI_AGENT_DIR / "memory" / ".lock"
 GITIGNORE_FILE = PROJECT_ROOT / ".gitignore"
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
 # Kept out of the repo: runtime state (this tool's own writes) and worktrees.
-GITIGNORE_LINES = ["multi-agent/", ".worktrees/"]
+GITIGNORE_LINES = ["multi-agent/", ".orch-lite/", ".worktrees/"]
 
 
 def ensure_multi_agent_dir():
@@ -384,7 +384,7 @@ def index_show(args):
 # ==================== Memory Commands ====================
 # Shared memory shared.json: writable by multiple agents concurrently.
 # Writes (memory set / memory append) serialize the load->modify->save sequence
-# with an exclusive flock on multi-agent/memory/.lock (the CLI enforces this
+# with an exclusive flock on .orch-lite/memory/.lock (the CLI enforces this
 # internally now, replacing the old boundary-claim convention).
 # Reads (memory get / memory list) need no lock: save_json writes are atomic
 # tmp+replace, so readers never observe a partial file.
@@ -392,7 +392,7 @@ def index_show(args):
 
 @contextlib.contextmanager
 def _memory_lock():
-    """Exclusive flock on multi-agent/memory/.lock serializing memory writes.
+    """Exclusive flock on .orch-lite/memory/.lock serializing memory writes.
 
     Degrades to lock-free behavior with a stderr warning when flock is
     unavailable (non-POSIX platform or locking failure) -- never crashes.
