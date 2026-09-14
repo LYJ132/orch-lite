@@ -381,9 +381,9 @@ Notes on honest judging:
 
 ## Act 10 — Owner-configured integrator dispatch composes from the registry (delta-only)
 
-**Purpose.** Prove the named-agent registry (`references/agents.json`) changes dispatch **composition**: a recurring role (the `integrator`) is dispatched with only per-task deltas plus the registry id — the full binding-rules preamble is not re-derived — and the child is pointed at its handbook first.
+**Purpose.** Prove the named-agent registry (`agents.json`) changes dispatch **composition**: a recurring role (the `integrator`) is dispatched with only per-task deltas plus the registry id — the full binding-rules preamble is not re-derived — and the child is pointed at its handbook first.
 
-**Setup.** The owner has added an `integrator` entry to `references/agents.json` (id, role `ops`, purpose, `standard_acceptance`) — see `references/agents.md` for the how-to.
+**Setup.** The owner has added an `integrator` entry to `agents.json` (id, role `ops`, purpose, `standard_acceptance`) — see `references/agents.md` for the how-to.
 
 **User's input** (session B, repo-internal, with all feature tasks of some feature completed):
 
@@ -393,7 +393,7 @@ Notes on honest judging:
 
 **Expected routing line.** First line: `[routing] task → single dispatch to ops-<id> (run_in_background=true)` — a single integration package; no orchestration machinery for the dispatch itself (index/worktree teardown is the dispatched work).
 
-**Expected behavior.** The main agent consults `references/agents.json` before composing. The dispatch package carries:
+**Expected behavior.** The main agent consults `agents.json` before composing. The dispatch package carries:
 
 - identity line + the standard abbreviated MUST block (NOT a re-derived, integrator-specific preamble);
 - the fenced-JSON package with this task's `task_id`, `role: ops`, the per-dispatch `objective` (merge `<fid>`, test, close index, tear down worktrees), any `acceptance_criteria` **deltas** beyond the registry's `standard_acceptance`, and at most 3 context-pointer lines — the registry's standing acceptance checks are NOT re-pasted;
@@ -404,7 +404,7 @@ The child then performs the integration (branch identity check, merge onto main,
 **Verify.**
 
 ```bash
-repo$ python3 -c "import json; print([a['id'] for a in json.load(open('references/agents.json'))['agents']])"
+repo$ python3 -c "import json; print([a['id'] for a in json.load(open('agents.json'))['agents']])"
 # -> includes 'integrator'
 ```
 

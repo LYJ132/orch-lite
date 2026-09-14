@@ -1,4 +1,4 @@
-# Named-Agent Registry (references/agents.json)
+# Named-Agent Registry (agents.json)
 
 A user-editable registry of recurring named subagents. It exists so the main agent can dispatch a familiar role — e.g. the `integrator` that performs the main agent's integration merges, pushes, index closeout, and worktree teardown — **without re-deriving or re-injecting the full binding-rules preamble every time**.
 
@@ -18,11 +18,11 @@ Per-task specifics (task_id, the concrete objective for THIS dispatch, extra acc
 
 ## How the owner adds an entry
 
-Append a JSON object with the fields above to `agents[]` in `references/agents.json`. Keep `purpose` general — if you find yourself writing task-specific detail into it, that detail belongs in the next dispatch's deltas instead.
+Append a JSON object with the fields above to `agents[]` in `agents.json`. Keep `purpose` general — if you find yourself writing task-specific detail into it, that detail belongs in the next dispatch's deltas instead.
 
 ## How dispatches use the registry (main agent MUST)
 
-1. **Before composing any dispatch, consult `references/agents.json`.** If a named agent fits the work, compose a **delta-only package**: identity line + abbreviated MUST block (the six rules stay summarized, never re-derived) + fenced JSON carrying the registry `id`, this task's `task_id`, `objective`, `acceptance_criteria` deltas, and context pointers. The registry entry's `standard_acceptance` are appended implicitly — do not re-paste them.
+1. **Before composing any dispatch, consult `agents.json`.** If a named agent fits the work, compose a **delta-only package**: identity line + abbreviated MUST block (the six rules stay summarized, never re-derived) + fenced JSON carrying the registry `id`, this task's `task_id`, `objective`, `acceptance_criteria` deltas, and context pointers. The registry entry's `standard_acceptance` are appended implicitly — do not re-paste them.
 2. **Every dispatch package's first instruction to the child is:** `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`.
 
 The registry refines dispatch **composition** only: routing is untouched — the three states and the 5 invariants are unchanged.
