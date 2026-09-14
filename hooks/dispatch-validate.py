@@ -137,7 +137,7 @@ def main():
             return 0
 
         tool_name = event.get("tool_name") or ""
-        if tool_name and tool_name not in ("Agent", "Task"):
+        if tool_name and tool_name not in ("Agent", "Task", "spawn_agent"):
             return 0  # the matcher scopes this hook; belt-and-braces only
 
         tool_input = event.get("tool_input") or {}
