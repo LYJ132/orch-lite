@@ -86,6 +86,66 @@ MISSING_CONTRACT = "(contract section missing in SKILL.md)"
 # argparse marks a not-yet-existing subcommand with these strings.
 DOCTOR_ABSENT_MARKERS = ("invalid choice", "unrecognized")
 
+# ---- Bootstrap (runs before/alongside the CLI init; pure + idempotent) ----
+# The runtime state dir is `.orch-lite/` (dot prefix = tool-managed runtime).
+# Flat layout: `.orch-lite/index.json` + `.orch-lite/memory.json`. The hook
+# NEVER probes or touches any legacy directory — a user's project may contain
+# its own `multi-agent/` directory, which is none of this plugin's business.
+STATE_DIR = Path.cwd() / ".orch-lite"
+AGENTS_JSON = Path.cwd() / "agents.json"
+# Plugin-bundled default registry template, used ONLY when agents.json is
+# absent at the project root (an existing one is never touched).
+DEFAULT_AGENTS_JSON = SKILL_DIR / "hooks" / "agents.default.json"
+
+INDEX_SKELETON = '{"tasks": {}}'
+MEMORY_SKELETON = '{"common_knowledge": {}, "experiences": [], "task_patterns": {}, "contracts": []}'
+
+# Fixed visibility line: the dispatch gate must be seen from session start.
+GATE_NOTICE = (
+    "Dispatch gate: every Agent dispatch is hook-validated — its package must "
+    "carry a `registry` field (a registered id from agents.json, or explicit "
+    "null with a `registry_reason` string) and its first instruction must tell "
+    "the child to read skills/orch-lite-executor/SKILL.md; dispatches missing "
+    "either are blocked before they run."
+)
+
+
+def _write_if_absent(path: Path, content: str) -> bool:
+    """Create `path` with `content` only when it does not exist."""
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return True
+
+
+def bootstrap_runtime() -> List[str]:
+    """Idempotent, never-destructive runtime bootstrap. Returns human lines.
+
+    - `.orch-lite/` created when missing (default `memory.json` skeleton,
+      empty `index.json` — flat layout).
+    - root `agents.json` created from the bundled default template ONLY when
+      absent; an existing registry is never overwritten.
+    Nothing existing is ever modified or deleted. Any OSError collapses to
+    one human line — never a traceback.
+    """
+    lines: List[str] = []
+    try:
+        created = _write_if_absent(STATE_DIR / "index.json", INDEX_SKELETON)
+        created |= _write_if_absent(STATE_DIR / "memory.json", MEMORY_SKELETON)
+        if created:
+            lines.append("bootstrap: .orch-lite/ created (fresh skeleton)")
+
+        if not AGENTS_JSON.exists() and DEFAULT_AGENTS_JSON.is_file():
+            AGENTS_JSON.write_text(
+                DEFAULT_AGENTS_JSON.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            lines.append("bootstrap: agents.json created from bundled default")
+    except OSError as exc:
+        reason = getattr(exc, "strerror", None) or type(exc).__name__
+        lines.append("bootstrap skipped: %s" % reason)
+    return lines
+
 # Traceback machinery words that must never reach the payload (an unwritable
 # cwd once injected a raw PermissionError traceback via the CLI's stderr).
 TRACEBACK_MARKERS = ("Traceback", 'File "', "PermissionError")
@@ -239,6 +299,10 @@ def build_context() -> str:
     parts = ["[orch-lite]"]
     for label, section in contract_sections():
         parts.append(f"--- {label} (from SKILL.md) ---\n{section}")
+    parts.append(GATE_NOTICE)
+    bootstrap_lines = bootstrap_runtime()
+    if bootstrap_lines:
+        parts.append("\n".join(bootstrap_lines))
     parts.append(
         _render_cli("Bootstrap", ["init"], "(no output)", code, init_out)
     )
