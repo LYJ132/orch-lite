@@ -1,0 +1,10 @@
+# Source-vs-runtime boundary: this repo carries skill source only.
+# `.orch-lite/` is live CLI state of whichever project the skill runs in (the
+# dot prefix marks it tool-managed runtime), `.worktrees/` are child write
+# areas destroyed at T2 — tracking either ships one machine's runtime as source.
+# `multi-agent/` stays ignored during the rename transition: older installs and
+# pre-migration checkouts still carry it; drop this line once no legacy dir
+# remains anywhere the skill runs.
+multi-agent/
+.orch-lite/
+.worktrees/

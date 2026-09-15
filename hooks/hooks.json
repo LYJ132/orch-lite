@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-init.py\"",
+            "commandWindows": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/session-init.py\"",
+            "async": false
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "spawn_agent|Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch-validate.py\"",
+            "commandWindows": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/dispatch-validate.py\"",
+            "async": false
+          }
+        ]
+      }
+    ]
+  }
+}

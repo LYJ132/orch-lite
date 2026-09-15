@@ -1,0 +1,40 @@
+{
+  "name": "orch-lite",
+  "version": "1.1.1",
+  "description": "Lightweight multi-agent orchestration skill. Routes every request into one of three states - chat, single background dispatch, or index+worktree orchestration - so the main agent only coordinates while all file-modifying work runs in background child agents. Use when a request involves writing or modifying files, git/build operations, or coordinating multiple child agents.",
+  "author": {
+    "name": "linyujian"
+  },
+  "repository": "https://github.com/LYJ132/orch-lite",
+  "license": "MIT",
+  "keywords": [
+    "orchestration",
+    "multi-agent",
+    "worktrees",
+    "skills",
+    "dispatch",
+    "workflow"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Orch-lite",
+    "shortDescription": "Lightweight multi-agent orchestration for coding agents",
+    "longDescription": "Use Orch-lite to route every request into chat, single background dispatch, or index+worktree orchestration, so the main agent only coordinates while all file-modifying work runs in background child agents.",
+    "developerName": "linyujian",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Dispatch this as a background child agent and keep coordinating.",
+      "Orchestrate this multi-item request with index + worktrees."
+    ],
+    "websiteURL": "https://github.com/LYJ132/orch-lite",
+    "privacyPolicyURL": "https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement",
+    "termsOfServiceURL": "https://docs.github.com/en/site-policy/github-terms/github-terms-of-service",
+    "screenshots": []
+  }
+}
