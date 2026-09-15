@@ -32,21 +32,25 @@ contains "task_id") and validates:
     package an explicit instruction for the child to create branch
     feature/<feature_id> from the current mainline HEAD; (2) otherwise fix
     the feature_id. Git unavailable / cwd not a repo → fail-open pass.
-- v5 dispatch gate (same block-and-re-send loop):
-  - no `registry` field in the package → deny (add a registered id from
-    agents.json, or explicit null with a `registry_reason` string)
-  - registry id not found in agents.json → deny, listing the valid ids
-  - registry null without a non-empty `registry_reason` string → deny
-  - prompt lacks the handbook-first instruction (no line telling the child
-    to read skills/orch-lite-executor/SKILL.md first) → deny
-  - agents.json missing or corrupt (only consulted when the package names a
-    registry id) → deny; the message says the next session start recreates
-    it from the bundled default (hooks/agents.default.json) or how to
-    restore it manually
+- v7 reuse loop (the guaranteed-reuse gate; packages WITHOUT a feature_id
+  are unaffected):
+  - package has a feature_id AND .orch-lite/index.json (project cwd) has
+    prior entries for that feature_id, but the package carries no `reuses`
+    field → deny ONCE with a digest of those entries (task ids, statuses,
+    one-line summaries) and the instruction to re-send with a `reuses`
+    field listing the task_ids the main session has read. The hook is
+    stateless, so the requirement is uniform: every dispatch whose feature
+    has index history must carry `reuses` — the digest denial teaches it.
+  - `reuses` present → every listed task_id must exist in the index; an
+    unknown id → deny naming the valid ones.
+  - feature_id with NO index history → passes without the loop (no
+    `reuses` required).
+- prompt lacks the handbook-first instruction (no line telling the child
+  to read skills/orch-lite-executor/SKILL.md first) → deny
 - otherwise         → allow (silent exit 0)
 
-agents.json is resolved from the process cwd (hooks run with the session's
-project cwd), i.e. the project-root registry that session-init bootstraps.
+The index is resolved from the process cwd (hooks run with the session's
+project cwd), i.e. the .orch-lite/ runtime that session-init bootstraps.
 
 instance_id is RETIRED: no longer a required or valid field; if present it is
 ignored. Malformed stdin or any internal error → fail-open: exit 0 with a
@@ -72,7 +76,7 @@ if sys.version_info < (3, 9):
 import json
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 REQUIRED_FIELDS = ["task_id", "role", "objective", "acceptance_criteria"]
 
@@ -99,34 +103,91 @@ FOREGROUND_REASON = (
     "run_in_background set to exactly true"
 )
 
-# ---- v5 dispatch gate ----
+# ---- v7 reuse loop ----
+# A package carrying a feature_id must NOT skip what the feature line already
+# knows: when the index has prior entries for that feature_id, the package
+# must carry a `reuses` field listing the task_ids the main session has read
+# before composing. The hook is stateless, so the requirement is uniform —
+# every dispatch whose feature has index history needs `reuses`; the first
+# dispatch is denied exactly once with a digest of the prior entries, which
+# teaches the requirement while surfacing the reusable history.
 
-# The dispatch package must carry a `registry` field: either a registered id
-# from agents.json, or explicit null plus a `registry_reason` string.
-MISSING_REGISTRY_REASON = (
-    "Dispatch package is missing the `registry` field: add \"registry\": "
-    "\"<id>\" (a registered agent id from agents.json) or \"registry\": null "
-    "with a non-empty \"registry_reason\" string explaining why no registered "
-    "agent fits; re-send the call with the registry field added"
+REUSES_REQUIRED_TMPL = (
+    "Feature %s already has tasks in the index (.orch-lite/index.json), so "
+    "this dispatch must reuse them rather than re-derive. Prior entries:\n%s\n"
+    "Read their conclusions (index show / feature-branch history), then "
+    "re-send the dispatch with a \"reuses\" field listing the task_ids you "
+    "have read (e.g. \"reuses\": [\"<task_id>\"]). Every dispatch whose "
+    "feature has index history must carry \"reuses\"."
 )
 
-UNKNOWN_REGISTRY_TMPL = (
-    "Dispatch package names registry id %r, which is not in agents.json; "
-    "valid ids: %s. Re-send with a registered id, or \"registry\": null plus "
-    "a \"registry_reason\" string"
+UNKNOWN_REUSES_TMPL = (
+    "Dispatch package field \"reuses\" names unknown task_id(s): %s. Valid "
+    "index task_ids: %s. Re-send with \"reuses\" listing only valid ids"
 )
 
-BAD_REGISTRY_TYPE_REASON = (
-    "Dispatch package field `registry` must be a string (a registered id "
-    "from agents.json) or null (with a non-empty `registry_reason` string); "
-    "re-send with the registry field fixed"
+BAD_REUSES_TYPE_REASON = (
+    "Dispatch package field \"reuses\" must be a non-empty list of index "
+    "task_ids (strings); re-send with \"reuses\" fixed"
 )
 
-MISSING_REGISTRY_REASON_TEXT_REASON = (
-    "Dispatch package has \"registry\": null but no usable \"registry_reason\": "
-    "add a non-empty string explaining why no registered agent fits; re-send "
-    "with registry_reason added"
-)
+
+def load_index_tasks() -> Optional[dict]:
+    """Index task map from .orch-lite/index.json in the process cwd, or None
+    when the index is missing/unreadable (nothing to gate against — fail-open
+    for the reuse loop, exactly like the other environment gates)."""
+    path = Path.cwd() / ".orch-lite" / "index.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    tasks = data.get("tasks") if isinstance(data, dict) else None
+    return tasks if isinstance(tasks, dict) else None
+
+
+def feature_digest(tasks: dict, feature_id: str) -> str:
+    """One line per prior entry of the feature: task_id, status, summary."""
+    lines = []
+    for tid, entry in tasks.items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("feature_id") != feature_id:
+            continue
+        summary = entry.get("output") or entry.get("objective") or ""
+        summary = " ".join(str(summary).split())[:100]
+        lines.append("- %s | status=%s | %s" % (
+            tid, entry.get("status", "?"), summary or "(no summary)"))
+    return "\n".join(lines) if lines else "(no entries)"
+
+
+def evaluate_reuse(package, feature_id) -> Tuple[bool, str]:
+    """Gate a feature-bound package against the index's prior feature work."""
+    if feature_id is None:
+        return True, ""  # unbound dispatch: unaffected
+    tasks = load_index_tasks()
+    if not tasks:
+        return True, ""  # no index: passes without the loop
+    has_history = any(
+        isinstance(e, dict) and e.get("feature_id") == str(feature_id)
+        for e in tasks.values()
+    )
+    if not has_history:
+        return True, ""  # no prior entries for THIS feature: no loop
+    reuses = package.get("reuses")
+    if reuses is None:
+        digest = feature_digest(tasks, str(feature_id))
+        return False, REUSES_REQUIRED_TMPL % (feature_id, digest)
+    if (
+        not isinstance(reuses, list)
+        or not reuses
+        or not all(isinstance(r, str) and r.strip() for r in reuses)
+    ):
+        return False, BAD_REUSES_TYPE_REASON
+    unknown = [r for r in reuses if r not in tasks]
+    if unknown:
+        return False, UNKNOWN_REUSES_TMPL % (
+            ", ".join(unknown), ", ".join(tasks.keys()))
+    return True, ""
 
 # Handbook-first: the prompt must tell the child which file to read first.
 HANDBOOK_PATH = "skills/orch-lite-executor/SKILL.md"
@@ -191,56 +252,6 @@ def evaluate_feature_binding(feature_id) -> Tuple[bool, str]:
     return False, BRANCH_MISSING_TMPL % (feature_id, feature_id, feature_id)
 
 
-AGENTS_JSON_BROKEN_TMPL = (
-    "agents.json at the project root is missing or corrupt (%s), so the "
-    "registry id cannot be verified. Fix: the next session start recreates it "
-    "from the bundled default (hooks/agents.default.json via the "
-    "session-init bootstrap), or restore it manually by copying "
-    "hooks/agents.default.json to agents.json and editing; re-send the "
-    "dispatch afterwards"
-)
-
-
-def load_registry_ids() -> Tuple[Optional[List[str]], Optional[str]]:
-    """(ids, None) when agents.json parses with an agents[] list of objects
-    carrying string ids; (None, human-reason) when missing/corrupt."""
-    path = Path.cwd() / "agents.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None, "file not found: %s" % path
-    except Exception as exc:
-        return None, "unreadable at %s: %s" % (path, type(exc).__name__)
-    agents = data.get("agents") if isinstance(data, dict) else None
-    if not isinstance(agents, list):
-        return None, "no agents[] list at %s" % path
-    ids = [
-        a.get("id") for a in agents
-        if isinstance(a, dict) and isinstance(a.get("id"), str)
-    ]
-    return ids, None
-
-
-def evaluate_registry(package) -> Tuple[bool, str]:
-    """Gate the package's `registry` field. Returns (allowed, reason)."""
-    if "registry" not in package:
-        return False, MISSING_REGISTRY_REASON
-    registry = package["registry"]
-    if registry is None:
-        reason = package.get("registry_reason")
-        if not isinstance(reason, str) or not reason.strip():
-            return False, MISSING_REGISTRY_REASON_TEXT_REASON
-        return True, ""
-    if not isinstance(registry, str) or not registry.strip():
-        return False, BAD_REGISTRY_TYPE_REASON
-    ids, err = load_registry_ids()
-    if ids is None:
-        return False, AGENTS_JSON_BROKEN_TMPL % err
-    if registry not in ids:
-        return False, UNKNOWN_REGISTRY_TMPL % (registry, ", ".join(ids) or "(none)")
-    return True, ""
-
-
 def find_dispatch_block(text: str) -> Optional[str]:
     """First ```json block; else the first fenced block mentioning task_id."""
     blocks = FENCE_RE.findall(text or "")
@@ -295,7 +306,7 @@ def evaluate(prompt, run_in_background):
     if not allowed:
         return False, reason
 
-    allowed, reason = evaluate_registry(package)
+    allowed, reason = evaluate_reuse(package, feature_id)
     if not allowed:
         return False, reason
 

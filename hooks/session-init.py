@@ -92,10 +92,6 @@ DOCTOR_ABSENT_MARKERS = ("invalid choice", "unrecognized")
 # NEVER probes or touches any legacy directory — a user's project may contain
 # its own `multi-agent/` directory, which is none of this plugin's business.
 STATE_DIR = Path.cwd() / ".orch-lite"
-AGENTS_JSON = Path.cwd() / "agents.json"
-# Plugin-bundled default registry template, used ONLY when agents.json is
-# absent at the project root (an existing one is never touched).
-DEFAULT_AGENTS_JSON = SKILL_DIR / "hooks" / "agents.default.json"
 
 INDEX_SKELETON = '{"tasks": {}}'
 MEMORY_SKELETON = '{"common_knowledge": {}, "experiences": [], "task_patterns": {}, "contracts": []}'
@@ -103,10 +99,12 @@ MEMORY_SKELETON = '{"common_knowledge": {}, "experiences": [], "task_patterns": 
 # Fixed visibility line: the dispatch gate must be seen from session start.
 GATE_NOTICE = (
     "Dispatch gate: every Agent dispatch is hook-validated — its package must "
-    "carry a `registry` field (a registered id from agents.json, or explicit "
-    "null with a `registry_reason` string) and its first instruction must tell "
-    "the child to read skills/orch-lite-executor/SKILL.md; dispatches missing "
-    "either are blocked before they run."
+    "carry the required fields (task_id / role / objective / "
+    "acceptance_criteria, run_in_background=true) and its first instruction "
+    "must tell the child to read skills/orch-lite-executor/SKILL.md; when the "
+    "package's feature already has index entries, it must also carry a "
+    "`reuses` field listing the index task_ids the main session has read; "
+    "dispatches missing any of this are blocked before they run."
 )
 
 
@@ -124,8 +122,6 @@ def bootstrap_runtime() -> List[str]:
 
     - `.orch-lite/` created when missing (default `memory.json` skeleton,
       empty `index.json` — flat layout).
-    - root `agents.json` created from the bundled default template ONLY when
-      absent; an existing registry is never overwritten.
     Nothing existing is ever modified or deleted. Any OSError collapses to
     one human line — never a traceback.
     """
@@ -135,12 +131,6 @@ def bootstrap_runtime() -> List[str]:
         created |= _write_if_absent(STATE_DIR / "memory.json", MEMORY_SKELETON)
         if created:
             lines.append("bootstrap: .orch-lite/ created (fresh skeleton)")
-
-        if not AGENTS_JSON.exists() and DEFAULT_AGENTS_JSON.is_file():
-            AGENTS_JSON.write_text(
-                DEFAULT_AGENTS_JSON.read_text(encoding="utf-8"), encoding="utf-8"
-            )
-            lines.append("bootstrap: agents.json created from bundled default")
     except OSError as exc:
         reason = getattr(exc, "strerror", None) or type(exc).__name__
         lines.append("bootstrap skipped: %s" % reason)

@@ -271,42 +271,6 @@ def _load_index_soft() -> tuple:
         return None, _bootstrap_error_line(exc)
 
 
-def _load_registry_ids() -> Optional[List[str]]:
-    """(ids) from the project-root agents.json when it parses with an agents[]
-    list carrying string ids; None when missing or unreadable (nothing to validate
-    against -- callers then fall back to a warning instead of an error)."""
-    try:
-        data = json.loads(Path("agents.json").read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    agents = data.get("agents") if isinstance(data, dict) else None
-    if not isinstance(agents, list):
-        return None
-    ids = [a.get("id") for a in agents if isinstance(a, dict) and isinstance(a.get("id"), str)]
-    return ids or None
-
-
-def _bind_agent(entry: Dict[str, Any], agent: Optional[str]) -> int:
-    """Shared index create/update agent-binding: entries may carry `agent` =
-    an agents.json registry id (feature binding lives in the index; agents.json >
-    index). Returns 0 (bound or warned), 1 (unknown id with agents.json readable)."""
-    if not agent:
-        return 0
-    ids = _load_registry_ids()
-    if ids is None:
-        print(f"Warning: cannot validate agent '{agent}' against agents.json "
-              f"(missing or unreadable in the current directory); binding recorded as-is")
-        entry["agent"] = agent
-        return 0
-    if agent not in ids:
-        print(f"Error: agent '{agent}' is not in agents.json; index entries may only "
-              f"reference registered ids ({', '.join(ids)}). Add the agent to agents.json "
-              f"first (agents.json > index: the index references, never defines).")
-        return 1
-    entry["agent"] = agent  # feature binding: which registered agent works this feature
-    return 0
-
-
 def index_create(args):
     """T1 assign time point: create a task entry (flat task map, status=assigned)"""
     index, err = _load_index_soft()
@@ -331,9 +295,6 @@ def index_create(args):
     }
     if args.feature_id:
         entry["feature_id"] = args.feature_id
-    rc = _bind_agent(entry, args.agent)
-    if rc:
-        return rc
     if args.agent_id:
         entry["agent_id"] = args.agent_id  # plain metadata: links the task to the platform agent/session that ran it
     tasks[args.task_id] = entry
@@ -360,10 +321,6 @@ def index_update(args):
         task["output"] = args.output
     if args.products is not None:
         task["products"] = list(args.products)
-    if args.agent is not None:
-        rc = _bind_agent(task, args.agent)
-        if rc:
-            return rc
     if args.agent_id:
         task["agent_id"] = args.agent_id  # plain metadata, no behavior change
     if args.status in TASK_TERMINAL_STATUSES and not task.get("completed_at"):
@@ -1219,7 +1176,6 @@ def main():
     create_idx.add_argument("--objective", help="Task objective")
     create_idx.add_argument("--criteria", nargs="*", help="Acceptance criteria (multiple allowed)")
     create_idx.add_argument("--agent-id", help="Platform agent/session id that runs this task (plain metadata; enables continuation/reuse checks)")
-    create_idx.add_argument("--agent", help="agents.json registry id bound to this feature (validated: must exist in agents.json; agents.json > index)")
 
     # index update (T2 status-update time point)
     update_idx = index_sub.add_parser("update", help="T2 status-update time point: update task status/products")
@@ -1228,7 +1184,6 @@ def main():
     update_idx.add_argument("--output", help="Output summary")
     update_idx.add_argument("--products", nargs="*", help="Product paths (multiple allowed)")
     update_idx.add_argument("--agent-id", help="Platform agent/session id that runs this task (plain metadata)")
-    update_idx.add_argument("--agent", help="agents.json registry id bound to this feature (validated: must exist in agents.json; agents.json > index)")
 
     # index list (flat task list)
     index_sub.add_parser("list", help="Flat task list (task_id | role | feature_id | status)")
