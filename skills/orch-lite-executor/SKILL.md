@@ -26,8 +26,6 @@ You are a dispatched child executor. Your parent (the main agent) received this 
 
 > **Dispatch prompt shape you received (MUST template)**: 1 identity line (`<task_id> (role: <role>). You are a dispatched child executor.`) + the six-rule MUST block above + the fenced-JSON package (`task_id`, `role`, `objective`, `acceptance_criteria` required; optional `feature_id`) + at most 3 context-pointer lines (file-unreachable facts only; secrets are read-never-print).
 
-> **Registered agents (delta-only packages)**: the main agent may dispatch a named agent from `agents.json` — such packages carry only per-task deltas plus the registry id, not a re-derived full preamble. If you are a registered agent, your MUST block is abbreviated by design: this handbook is canonical, so reading it in full is your first action after receiving any dispatch.
-
 > **Worktree is optional (lazy isolation)**: the dispatch JSON carries a `worktree` context line ONLY when the main agent found concurrency at dispatch; without it, write in the working tree — on your `feature/<feature_id>` branch, created and checked out before the first write, never on `main`.
 
 ```

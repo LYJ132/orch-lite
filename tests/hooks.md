@@ -36,12 +36,14 @@ re-sent with the fenced block. Calls whose `run_in_background` is not exactly
 `true` are also **DENIED** — dispatches must be background so the main
 session returns to the user immediately.
 
-v5 dispatch gate (same block-and-re-send loop): the package must carry a
-`registry` field — a registered id from the root `agents.json`, or explicit
-`null` with a `registry_reason` string — and the prompt must tell the child
-to read `skills/orch-lite-executor/SKILL.md` first. Missing/corrupt
-agents.json (only consulted when a registry id is named) denies with a
-message pointing at the session-start recreate or manual restore.
+v7 reuse loop (same block-and-re-send loop): when the package's `feature_id`
+already has entries in `.orch-lite/index.json` (project cwd), the package
+must carry a `reuses` field listing the index task_ids the main session has
+read. Omission denies ONCE with a digest of the prior entries (task ids,
+statuses, one-line summaries); an unknown id denies naming the valid ones. A
+feature with no index history passes without `reuses`; packages without a
+`feature_id` are unaffected. The hook is stateless, so every dispatch whose
+feature has index history carries `reuses` — the digest denial teaches it.
 
 Enforces N15 (amended): a dispatch must carry 4 required fields
 (`task_id` / `role` / `objective` / `acceptance_criteria`); the optional
@@ -63,13 +65,13 @@ ignored when present.
 | 1.10 | fenced JSON + valid `feature_id: "payment"` + background | exit 0, empty stdout | ✅ |
 | 1.11 | valid fenced JSON but `run_in_background` absent | exit 2, stderr: `Dispatches must run in the background (run_in_background=true) so the main session returns to the user immediately; re-send with run_in_background set to exactly true` | ✅ |
 | 1.12 | valid fenced JSON but `run_in_background: false` | exit 2 (foreground reason on stderr, as 1.11) | ✅ |
-| 1.13 | fenced JSON without a `registry` field | exit 2, stderr names the missing field and the null+`registry_reason` alternative | ✅ |
-| 1.14 | fenced JSON with `registry: "no-such-agent"` (not in agents.json) | exit 2, stderr lists the valid ids | ✅ |
+| 1.13 | `feature_id` whose feature has index history, no `reuses` field | exit 2, stderr: digest of the feature's own entries (task id / status / summary) + instruction to re-send with `reuses` | ✅ |
+| 1.14 | `reuses` naming an unknown task_id | exit 2, stderr lists the valid index task_ids | ✅ |
 | 1.15 | prompt without the handbook-first instruction (no `skills/orch-lite-executor/SKILL.md` line) | exit 2, stderr names the handbook path | ✅ |
-| 1.16 | `registry: null` without a `registry_reason` string | exit 2, stderr asks for the reason string | ✅ |
-| 1.17 | `registry: "integrator"` but no `agents.json` in the project cwd | exit 2, stderr: next session start recreates it from the bundled default, or restore manually | ✅ |
-| 1.18 | `registry: "integrator"` but agents.json is corrupt | exit 2, same recreate/restore help as 1.17 | ✅ |
-| 1.19 | `registry: "integrator"` (valid id) + handbook-first line | exit 0, empty stdout | ✅ |
+| 1.16 | `reuses` of a wrong shape (empty list / non-list / non-string item) | exit 2, stderr asks for a non-empty list of index task_ids | ✅ |
+| 1.17 | `feature_id` with NO index history (index present, other features only) | exit 0 — no `reuses` required | ✅ |
+| 1.18 | `reuses` with valid index task_ids + handbook-first line | exit 0, empty stdout | ✅ |
+| 1.19 | package WITHOUT `feature_id` while the index is full of history | exit 0 (reuse loop unaffected) | ✅ |
 | 1.20 | v6 binding: package with `feature_id` whose branch `feature/<fid>` exists (sandbox repo) | exit 0, empty stdout | ✅ |
 | 1.21 | v6 binding: `feature_id` whose branch is absent | exit 2, stderr names both fixes: create branch `feature/<fid>` from mainline HEAD (new feature) or fix the `feature_id` | ✅ |
 | 1.22 | v6 binding: package without `feature_id` in a non-repo cwd | exit 0 (binding gate unaffected; git fail-open) | ✅ |

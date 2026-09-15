@@ -379,38 +379,40 @@ Notes on honest judging:
 
 **Pass** — index all-completed, no new doctor findings, no task_id-authored first-parent commits, no worktree leftovers, remote matches local within the stated delta. **Fail** — any stuck index entry, any new doctor finding, any direct-to-main task commit, or a local/remote mismatch beyond that delta.
 
-## Act 10 — Owner-configured integrator dispatch composes from the registry (delta-only)
+## Act 10 — Same-feature dispatch exercises the reuse loop (reuses required)
 
-**Purpose.** Prove the named-agent registry (`agents.json`) changes dispatch **composition**: a recurring role (the `integrator`) is dispatched with only per-task deltas plus the registry id — the full binding-rules preamble is not re-derived — and the child is pointed at its handbook first.
+**Purpose.** Prove the reuse loop (the one reuse guarantee): a dispatch whose `feature_id` already has index entries is denied ONCE with a digest of the prior entries, and the re-sent package carries `reuses` — with no agents.json registry and no role pre-definitions anywhere (the package's objective/acceptance_criteria ARE the agent's definition).
 
-**Setup.** The owner has added an `integrator` entry to `agents.json` (id, role `ops`, purpose, `standard_acceptance`) — see `references/agents.md` for the how-to.
+**Setup.** Feature `<fid>` already has completed tasks in the index (`index show --feature-id <fid>` shows them); branch `feature/<fid>` exists.
 
-**User's input** (session B, repo-internal, with all feature tasks of some feature completed):
+**User's input** (session B, repo-internal, all feature tasks of `<fid>` completed, follow-up work needed):
 
 ```
-用 agents.json 里注册的 integrator 把 <fid> 的分支合入 main，跑全套测试，关掉索引条目，清理 worktree
+把 <fid> 的登录 500 再查一下，补上上个任务留下的回归测试
 ```
 
-**Expected routing line.** First line: `[routing] task → single dispatch to ops-<id> (run_in_background=true)` — a single integration package; no orchestration machinery for the dispatch itself (index/worktree teardown is the dispatched work).
+**Expected routing line.** First line: `[routing] task → single dispatch to impl-<id> (run_in_background=true)` — a single package on the existing feature line.
 
-**Expected behavior.** The main agent consults `agents.json` before composing. The dispatch package carries:
+**Expected behavior.** The main agent reads the feature's index entries BEFORE composing, and the dispatch package carries:
 
-- identity line + the standard abbreviated MUST block (NOT a re-derived, integrator-specific preamble);
-- the fenced-JSON package with this task's `task_id`, `role: ops`, the per-dispatch `objective` (merge `<fid>`, test, close index, tear down worktrees), any `acceptance_criteria` **deltas** beyond the registry's `standard_acceptance`, and at most 3 context-pointer lines — the registry's standing acceptance checks are NOT re-pasted;
+- identity line + the standard abbreviated MUST block;
+- the fenced-JSON package with this task's `task_id`, `role: impl`, an `objective`/`acceptance_criteria` pair shaped from what the prior entries teach (not a re-derived preamble), `feature_id: "<fid>"`, and `"reuses": [<the index task_ids the main session actually read>]`;
 - as its **first instruction to the child**: `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`.
 
-The child then performs the integration (branch identity check, merge onto main, suite, index closeout, worktree teardown) per the registry entry, and the three routing states / 5 invariants are visibly unchanged — no fourth state, no new routing line shape.
+If the first composition omits `reuses`, the dispatch-validate hook blocks the call with a digest of the feature's prior entries; the re-sent package then carries `reuses`. The child then performs the work on `feature/<fid>`, and the three routing states / 5 invariants are visibly unchanged — no fourth state, no new routing line shape.
 
 **Verify.**
 
 ```bash
-repo$ python3 -c "import json; print([a['id'] for a in json.load(open('agents.json'))['agents']])"
-# -> includes 'integrator'
+repo$ python3 scripts/multi-agent index show --feature-id <fid>
+# -> lists the prior task_ids the package's `reuses` names
+repo$ ls agents.json
+# -> no such file (the registry layer is removed)
 ```
 
-Plus the transcript: the package is delta-only (no registry acceptance checks re-pasted, no integrator preamble re-derived) and its first child-facing instruction is the handbook pointer. Integration lands per the registry's `standard_acceptance` (suite passes, index entry completed, worktree gone).
+Plus the transcript: the package is self-contained (objective + acceptance_criteria shaped per task, no registry preamble) and its first child-facing instruction is the handbook pointer.
 
-**Pass** — registry consulted (delta-only package + registry id), handbook-first line present, routing states/invariants untouched. **Fail** — a full re-derived preamble, registry acceptance checks re-pasted into the package, no handbook pointer, or any change to the three-state routing.
+**Pass** — `reuses` present (or the digest denial + corrected re-send observed), handbook-first line present, no agents.json consulted, routing states/invariants untouched. **Fail** — a dispatch with index history and no `reuses` allowed through, an unknown `reuses` id allowed through, or any change to the three-state routing.
 
 ## Run log
 
@@ -426,4 +428,4 @@ Plus the transcript: the package is delta-only (no registry acceptance checks re
 | 7 | | | gate: impl-20260912-07 integrated? |
 | 8 | | | probe (b): |
 | 9 | | — | |
-| 10 | | | registry: integrator entry present? |
+| 10 | | | reuse loop: reuses field on same-feature dispatch? |

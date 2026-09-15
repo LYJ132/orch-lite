@@ -168,4 +168,4 @@ Extensions: user appends as needed; main agent proposes → user confirms.
 | >3 heterogeneous parallel packages | User confirms each one's purpose/prompt/acceptance |
 | Multiple homogeneous packages | No approval; dispatch directly |
 | Parallel dispatch | ≥2 disjoint-scope packages with no dependency → same-turn parallel Agent calls, `run_in_background: true` |
-| Required info | task_id, role, objective, acceptance_criteria (+ `feature_id` — a MUST binding the dispatch to branch `feature/<feature_id>`; generic unbound dispatches stay valid via omitting it with `registry: null` + `registry_reason`) |
+| Required info | task_id, role, objective, acceptance_criteria (+ `feature_id` — a MUST binding the dispatch to branch `feature/<feature_id>`; generic unbound dispatches stay valid via omitting it; `reuses` required when the feature already has index entries) |
