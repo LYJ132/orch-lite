@@ -217,9 +217,25 @@ case_1_9() {
 }
 
 case_1_10() {
-  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "payment", "registry": null, "registry_reason": "probe"}'
-  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  # branch-safe feature_id + existing feature branch -> allow (v6 binding:
+  # run in a sandbox repo where refs/heads/feature/payment exists)
+  local d pkg
+  d="$(fresh_git_repo feature/payment)" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "payment", "registry": null, "registry_reason": "probe"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
+}
+
+# fresh_git_repo <branch> — sandbox git repo on main with one commit and
+# <branch> (refs/heads/<branch>) created; echoes the repo path.
+fresh_git_repo() {
+  local d
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  git -C "$d" init -q -b main || return 1
+  git -C "$d" -c user.name=t -c user.email=t@l commit -q --allow-empty -m base || return 1
+  git -C "$d" branch -q "$1" || return 1
+  printf '%s\n' "$d"
 }
 
 case_1_11() {
@@ -291,6 +307,65 @@ case_1_19() {
   local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": "integrator"}'
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
+}
+
+# --- v6 feature-branch binding (packages WITH a feature_id only) ---
+
+case_1_20() {
+  # A1: feature branch exists -> pass silently
+  local d pkg
+  d="$(fresh_git_repo feature/existing-line)" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "existing-line", "registry": null, "registry_reason": "probe"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
+}
+
+case_1_21() {
+  # A1: feature branch absent -> deny naming BOTH fixes (create-branch
+  # instruction for a new feature; fix the feature_id otherwise)
+  local d pkg
+  d="$(fresh_git_repo feature/other-line)" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "missing-line", "registry": null, "registry_reason": "probe"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "Branch feature/missing-line does not exist"
+  case "$DV_STDERR" in
+    *"create branch feature/missing-line from the current mainline HEAD"*) : ;;
+    *) printf 'deny lacks the NEW-feature create-branch fix\n'; return 1 ;;
+  esac
+  case "$DV_STDERR" in
+    *"fix the feature_id"*) : ;;
+    *) printf 'deny lacks the fix-the-feature_id fix\n'; return 1 ;;
+  esac
+}
+
+case_1_22() {
+  # A1: package WITHOUT feature_id is unaffected by the binding gate, even
+  # outside any git repo (fail-open for git, no deny)
+  local d pkg
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  pkg="$PKG_OK"
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
+}
+
+case_route_must() {
+  # B: Step 0 routing line is a hard MUST; self-repair clause and the three
+  # routing states stay in the Request Routing section.
+  python3 - "$SKILL_MD" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+start = src.index("## Request Routing")
+end = src.index("## ", start + 5)
+section = src[start:end].replace("**", "")
+assert "MUST output exactly one `[routing] ...` line as the first line of every reply" in section, \
+    "routing MUST line missing"
+assert "Self-repair." in section, "self-repair clause missing"
+for state in ("[routing] chat → handle directly",
+              "[routing] task → single dispatch",
+              "[routing] orchestration → enable index+worktrees"):
+    assert state in section, f"routing state missing: {state}"
+PY
 }
 
 # Fail-soft audit probe: structurally broken tool_input payloads must yield
@@ -765,6 +840,10 @@ run_case "1.16   registry null w/o reason -> deny"        case_1_16
 run_case "1.17   agents.json missing -> deny + help"      case_1_17
 run_case "1.18   agents.json corrupt -> deny + help"      case_1_18
 run_case "1.19   registered id + handbook -> allow"       case_1_19
+run_case "1.20   v6 binding: branch exists -> pass"       case_1_20
+run_case "1.21   v6 binding: branch absent -> deny, both fixes" case_1_21
+run_case "1.22   v6 binding: no feature_id unaffected"    case_1_22
+run_case "ROUTE  Step 0 routing line is a MUST (B)"       case_route_must
 run_case "audit  dispatch-validate broken shapes"         case_1_audit_shapes
 run_case "3.1    fresh project bootstrap (temp copy)"     case_3_1
 run_case "3.2    populated index injected (temp copy)"    case_3_2

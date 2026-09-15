@@ -70,6 +70,10 @@ ignored when present.
 | 1.17 | `registry: "integrator"` but no `agents.json` in the project cwd | exit 2, stderr: next session start recreates it from the bundled default, or restore manually | ✅ |
 | 1.18 | `registry: "integrator"` but agents.json is corrupt | exit 2, same recreate/restore help as 1.17 | ✅ |
 | 1.19 | `registry: "integrator"` (valid id) + handbook-first line | exit 0, empty stdout | ✅ |
+| 1.20 | v6 binding: package with `feature_id` whose branch `feature/<fid>` exists (sandbox repo) | exit 0, empty stdout | ✅ |
+| 1.21 | v6 binding: `feature_id` whose branch is absent | exit 2, stderr names both fixes: create branch `feature/<fid>` from mainline HEAD (new feature) or fix the `feature_id` | ✅ |
+| 1.22 | v6 binding: package without `feature_id` in a non-repo cwd | exit 0 (binding gate unaffected; git fail-open) | ✅ |
+| ROUTE | SKILL.md Step 0: routing line restated as a MUST; self-repair clause and the three `[routing]` states intact | assertions on the Request Routing section | ✅ |
 
 Hard enforcement (1.4, 1.7, 1.11–1.12) is the v3 design point: the fenced
 block is the only dispatch marker that actually reaches the hook, and its
