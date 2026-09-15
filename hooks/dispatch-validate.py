@@ -25,6 +25,13 @@ contains "task_id") and validates:
                     → deny, listing them
 - feature_id present but not ^[a-z0-9][a-z0-9._-]*$
                     → deny (it names the feature/<feature_id> branch)
+- v6 feature-branch binding (packages WITH a feature_id only; packages
+  without one are unaffected):
+  - refs/heads/feature/<feature_id> absent (git rev-parse in the session
+    cwd) → deny with exactly two fixes: (1) NEW feature → include in the
+    package an explicit instruction for the child to create branch
+    feature/<feature_id> from the current mainline HEAD; (2) otherwise fix
+    the feature_id. Git unavailable / cwd not a repo → fail-open pass.
 - v5 dispatch gate (same block-and-re-send loop):
   - no `registry` field in the package → deny (add a registered id from
     agents.json, or explicit null with a `registry_reason` string)
@@ -131,6 +138,59 @@ MISSING_HANDBOOK_REASON = (
     "handbook)'); re-send the call with that line added"
 )
 
+# ---- v6 feature-branch binding ----
+# A package carrying a feature_id binds the dispatch to the feature line's
+# recorded state (branch feature/<feature_id> + index + memory). When the
+# branch does not exist at dispatch time, related work would fragment onto a
+# fresh line, so the gate denies with exactly two fixes: declare the branch
+# creation (new feature) or fix the feature_id (existing feature).
+
+BRANCH_MISSING_TMPL = (
+    "Branch feature/%s does not exist in this repository, so the dispatch "
+    "cannot bind to that feature line's recorded state (branch + index + "
+    "memory). Fix in exactly one of two ways: (1) if this is a NEW feature, "
+    "include in the package an explicit instruction for the child to create "
+    "branch feature/%s from the current mainline HEAD (e.g. 'git checkout "
+    "-b feature/%s' from mainline HEAD) before its first write; "
+    "(2) otherwise fix the feature_id to the existing feature line "
+    "(see `python3 scripts/multi-agent index list`)"
+)
+
+
+def feature_branch_exists(feature_id: str) -> Tuple[Optional[bool], Optional[str]]:
+    """(True, None) when refs/heads/feature/<fid> exists; (False, None) when
+    it does not; (None, diagnostic) when git itself is unusable (fail-open —
+    a hook must never block a call because git is missing or cwd is not a
+    repo)."""
+    import subprocess
+
+    ref = "refs/heads/feature/%s" % feature_id
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+    except Exception as exc:
+        return None, "git unavailable: %r" % (exc,)
+    if proc.returncode == 0:
+        return True, None
+    if "not a git repository" in (proc.stderr or b"").decode("utf-8", "replace"):
+        return None, "cwd is not a git repository"
+    return False, None
+
+
+def evaluate_feature_binding(feature_id) -> Tuple[bool, str]:
+    """Gate a package's feature_id against the repository's branch state."""
+    if feature_id is None:
+        return True, ""  # generic (unbound) dispatch: unaffected
+    exists, diag = feature_branch_exists(str(feature_id))
+    if exists is True or exists is None:
+        return True, ""  # bound, or git unusable -> fail-open
+    return False, BRANCH_MISSING_TMPL % (feature_id, feature_id, feature_id)
+
+
 AGENTS_JSON_BROKEN_TMPL = (
     "agents.json at the project root is missing or corrupt (%s), so the "
     "registry id cannot be verified. Fix: the next session start recreates it "
@@ -228,6 +288,12 @@ def evaluate(prompt, run_in_background):
             "feature_id must match [a-z0-9][a-z0-9._-]* (used as the "
             "feature/<feature_id> branch name)"
         )
+
+    # v6 binding: a feature_id must point at an existing feature branch, or
+    # the package must carry the create-branch instruction (new feature).
+    allowed, reason = evaluate_feature_binding(feature_id)
+    if not allowed:
+        return False, reason
 
     allowed, reason = evaluate_registry(package)
     if not allowed:
