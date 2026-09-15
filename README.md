@@ -54,7 +54,11 @@ The diagram compares the two interactions:
 - **Top (traditional):** the agent's Task A/B/C and the human's Read & Send blocks are serially staggered — the human waits while a task runs, and the agent starts the next task only after the human sends a message. Both sides wait on each other.
 - **Bottom (Orch-lite):** Task A/B/C form a continuous pipeline, with the human's Send and Read & Send blocks interleaved with task execution. The agent keeps advancing, and the human keeps working.
 
-The two timelines are no longer synchronized: the human's decision flow stays continuous while agent execution proceeds in parallel in the background. This separation brings two concrete forms of decoupling. Context decoupling keeps the main session clean: requirements, ideas, direction, questions, decisions, and review results stay in the conversation, while file edits, tool calls, tests, logs, debugging, and execution detail live with the background agent. Execution detail still exists and is tracked by the task system, but it no longer occupies the center of the conversation — yielding a cleaner main-session context, less redundant execution content, longer-lived sessions, and in suitable cases lower token consumption. Token savings are a consequence, not the goal. Attention and cognitive decoupling goes further: the main session becomes a space for thinking about goals, trade-offs, and next steps, rather than a place to stream what the agent just executed, what a command printed, or why a test failed. The latter is essential for execution, but it should not crowd out the conversation. When the main session stays focused on intent and direction, the agent can devote its attention to understanding real intent instead of burning context on execution detail.
+The two timelines are no longer synchronized: the human's decision flow stays continuous while agent execution proceeds in parallel in the background.
+
+This separation brings two concrete forms of decoupling. **Context decoupling** keeps the main session clean: requirements, ideas, direction, questions, decisions, and review results stay in the conversation, while file edits, tool calls, tests, logs, debugging, and execution detail live with the background agent. Execution detail still exists and is tracked by the task system, but it no longer occupies the center of the conversation — yielding a cleaner main-session context, less redundant execution content, longer-lived sessions, and in suitable cases lower token consumption. Token savings are a consequence, not the goal.
+
+**Attention and cognitive decoupling** goes further. The main session becomes a space for thinking about goals, trade-offs, and next steps, rather than a place to stream what the agent just executed, what a command printed, or why a test failed. The latter is essential for execution, but it should not crowd out the conversation. When the main session stays focused on intent and direction, the agent can devote its attention to understanding real intent instead of burning context on execution detail.
 
 ---
 
@@ -224,79 +228,9 @@ Claude Code 适配代码位于本仓库的 `feature/claude-code` 分支。**尚�
 
 ---
 
-## 问题：串行交互中的双向阻塞
-
-传统 Coding Agent 的交互是一个串行过程：
-
-```
-人提出需求
-    ↓
-Agent 开始执行
-    ↓
-人等待 Agent
-    ↓
-Agent 执行完成
-    ↓
-人查看结果
-    ↓
-人提出下一个需求
-```
-
-这一流程看似自然，实际上在两个方向上都存在阻塞。
-
-### 人在等待 Agent
-
-Agent 修改代码、运行测试、调试问题期间，人通常只能等待其完成，但人的思考并不会因此停止。等待期间可能已经：
-
-- 产生了新的需求；
-- 发现了既有方案的问题；
-- 需要追问某个概念；
-- 需要安排另一件独立工作；
-- 准备启动下一个任务。
-
-而此时 Agent 仍处于执行状态。**Agent 的执行时间，直接成为人的等待时间。**
-
-### Agent 也在等待人
-
-另一个方向的阻塞恰好相反。Agent 在执行过程中经常需要等待人：
-
-- 提供方向；
-- 回答问题；
-- 确认方案；
-- 决定下一步；
-- 审核结果。
-
-传统流程因此成为一条交替等待的链：
-
-```
-人 → Agent → 人 → Agent → 人 → Agent
-```
-
-**人的决策与 Agent 的执行被绑定在同一条时间线上。** 人必须等待 Agent，Agent 也必须等待人。多数情况下，这种等待并非工作本身的要求，而是当前交互方式造成的结果。
-
----
-
-## 长会话被执行内容污染
-
-Coding Agent 的典型会话会不断变长：
-
-```
-用户需求 → Agent 分析 → 工具调用 → 代码修改 → 终端输出
-   → 测试 → 报错 → 调试 → 再次修改 → 再次测试 → ...
-```
-
-这些内容对完成当前任务不可或缺，但并非长期交流中最重要的信息。随着任务推进，主会话会持续堆积：
-
-- 代码与 diff；
-- 日志与测试结果；
-- 调试过程与工具调用；
-- 临时错误与大量执行细节。
-
-其结果是：**原本用于承载需求、想法和决策的会话，逐渐退化为 Agent 的执行日志。** 这既影响阅读，也使上下文不断膨胀。
-
----
-
 ## 解耦：两条独立的时间线
+
+传统 Coding Agent 的交互是一条交替等待的链：人提出需求，Agent 执行，人等待；Agent 需要方向，人决定——如此循环。人的决策与 Agent 的执行被绑定在同一条时间线上，多数等待并非工作本身的要求，而是交互方式造成的结果。与此同时，随着会话不断增长，代码 diff、日志、测试输出、调试痕迹等执行内容持续堆积，原本用于承载需求、想法和决策的对话，逐渐退化为 Agent 的执行日志。
 
 Orch-lite 的关键不在于增加 Agent 的数量，而在于**让人的工作流与 Agent 的执行各自拥有独立的时间线。**
 
@@ -309,60 +243,9 @@ Orch-lite 的关键不在于增加 Agent 的数量，而在于**让人的工作�
 
 两条时间线不再同步：人的决策流程保持连续，Agent 的执行在后台并行推进。
 
----
+这种分离带来两个具体的解耦层次。**上下文解耦**让主会话保持整洁：用户需求、想法、方向、问题、决策与审核结果留在对话中，文件修改、工具调用、测试、日志、调试与执行细节则由后台 Agent 承载。执行细节依然存在、可被任务系统追踪，却不再占据交流的主要空间——主会话上下文更干净、冗余执行内容更少、长会话更易维持，并在适当场景下降低 Token 消耗。Token 节省是上下文解耦的结果，而非设计目标。
 
-## 三个层面的解耦
-
-### 工作流解耦
-
-Agent 执行任务时，人无需停止自己的工作。
-
-```
-人的工作流：  ─────────────────────────────→
-Agent A：     ──────────→
-Agent B：          ─────────────→
-Agent C：                 ───────────→
-```
-
-Agent 的执行时间不再等价于人的等待时间。
-
-等待不会完全消失：即时搜索、复杂讨论、等待人做决定等工作仍需主会话亲自完成。Orch-lite 的作用是**将原本不必要的等待移出人的工作流。**
-
-### 上下文解耦
-
-执行任务所需的大量细节不再堆积于主会话：
-
-```
-主会话                      后台 Agent
-├── 用户需求                ├── 文件修改
-├── 想法                    ├── 工具调用
-├── 方向                    ├── 测试
-├── 问题                    ├── 日志
-├── 决策                    ├── Debug
-└── 审核结果                └── 执行细节
-```
-
-主会话因此保持整洁。执行细节依然存在、可被任务系统追踪，但不持续占据交流的主要空间。这带来更干净的主会话上下文、更少的冗余执行内容、更易维持的长会话，并在适当场景下降低 Token 消耗——Token 节省是上下文解耦的结果，而非设计目标。
-
-### 注意力与认知解耦
-
-主会话承载的核心内容应是：
-
-- 目标是什么；
-- 为什么这样做；
-- 方向在哪里；
-- 存在哪些问题；
-- 如何取舍；
-- 下一步做什么。
-
-而非：
-
-- Agent 刚刚执行了什么；
-- 某条命令的输出是什么；
-- 某个测试为何失败；
-- 某个文件的某一行发生了什么。
-
-后者对执行至关重要，却不应持续占据交流的中心。**主会话应是人与 Agent 思考的空间，而非执行日志。** 当主会话聚焦于需求、方向与决策时，Agent 也能将更多注意力用于理解真实意图，而不是在执行细节中消耗上下文。
+**注意力与认知解耦**更进一步。主会话应是讨论目标、取舍与下一步的空间，而不是实时播报 Agent 刚执行了什么、某条命令输出了什么、某个测试为何失败。后者对执行至关重要，却不应持续占据交流的中心。当主会话聚焦于意图与方向时，Agent 也能将更多注意力用于理解真实意图，而非在执行细节中消耗上下文。
 
 ---
 
