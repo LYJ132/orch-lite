@@ -48,8 +48,8 @@ project root/                        ← primary working tree: main agent only (
 **Two write time points (both main-agent exclusive)**:
 | Time | Command | Written |
 |---|---|---|
-| T1 assign | `index create --task-id --role [--feature-id] [--objective] [--criteria ...] [--agent-id <agent>]` | flat entry, status=assigned; `agent_id` = plain metadata (the platform agent/session that runs the task; enables the continuation/reuse check) |
-| T2 status update | `index update --task-id [--status --output --products] [--agent-id <agent>]` | status/output/products (+ optional agent_id metadata); completed/failed auto-records completed_at |
+| T1 assign | `index create --task-id --role [--feature-id] [--objective] [--criteria ...] [--agent-id <agent>] [--agent <agents.json id>]` | flat entry, status=assigned; `agent_id` = plain metadata (the platform agent/session that runs the task; enables the continuation/reuse check); `agent` = feature binding (an agents.json registry id, validated — agents.json > index) |
+| T2 status update | `index update --task-id [--status --output --products] [--agent-id <agent>] [--agent <agents.json id>]` | status/output/products (+ optional agent_id metadata, + optional agent feature binding); completed/failed auto-records completed_at |
 
 ---
 
@@ -98,8 +98,8 @@ Worktree isolation prevents concurrent edits from colliding; integration conflic
 | Command | User | Purpose |
 |---|---|---|
 | `init` | anyone | create `.orch-lite/` structure (+ git bootstrap when absent) |
-| `index create --task-id --role [--feature-id] [--objective] [--criteria ...]` | Main, T1 | flat task entry, status=assigned |
-| `index update --task-id [--status --output --products]` | Main, T2 | update status/output/products (completed/failed → completed_at) |
+| `index create --task-id --role [--feature-id] [--objective] [--criteria ...] [--agent <agents.json id>]` | Main, T1 | flat task entry, status=assigned |
+| `index update --task-id [--status --output --products] [--agent <agents.json id>]` | Main, T2 | update status/output/products (completed/failed → completed_at) |
 | `index list` | anyone | flat task list (`task_id \| role \| feature_id \| status`) |
 | `index show --task-id <id>` / `--feature-id <fid>` | anyone | task detail / all tasks of a feature (reuse check) |
 | `worktree create --task-id --feature-id [--base main]` | Main, T1 | create `.worktrees/<task_id>/` on `feature/<feature_id>` |
