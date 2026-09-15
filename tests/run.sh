@@ -117,7 +117,7 @@ print(json.dumps({"tool_name": tool_name, "tool_input": ti}))
 PY
 }
 
-PKG_OK='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": null, "registry_reason": "no registered agent fits a probe"}'
+PKG_OK='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"]}'
 
 # Handbook-first line every dispatch prompt must carry (v5 gate).
 HANDBOOK_LINE='MANDATORY FIRST ACTION: read skills/orch-lite-executor/SKILL.md (your handbook).'
@@ -130,8 +130,8 @@ fenced_prompt_nohb() {  # same, WITHOUT the handbook-first line (gate-negative)
   printf 'context line\n\n```json\n%s\n```\n' "$1"
 }
 
-# Run dispatch-validate from a different cwd (the gate resolves agents.json
-# from the process cwd = project root, exactly like in a live session).
+# Run dispatch-validate from a different cwd (the gate resolves the
+# .orch-lite index from the process cwd = project root, as in a live session).
 dv_run_in() {  # $1=cwd, $2=event json
   ( cd "$1" && printf '%s' "$2" | python3 "$SKILL_DIR/hooks/dispatch-validate.py" 2>"$DV_ERR_FILE" )
   DV_RC=$?
@@ -183,7 +183,7 @@ case_1_5() {
 }
 
 case_1_6() {
-  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "instance_id": "retired-ignorer", "registry": null, "registry_reason": "probe"}'
+  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "instance_id": "retired-ignorer"}'
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
 }
@@ -221,7 +221,7 @@ case_1_10() {
   # run in a sandbox repo where refs/heads/feature/payment exists)
   local d pkg
   d="$(fresh_git_repo feature/payment)" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "payment", "registry": null, "registry_reason": "probe"}'
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "payment"}'
   dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
 }
@@ -238,6 +238,16 @@ fresh_git_repo() {
   printf '%s\n' "$d"
 }
 
+# reuse_repo <branch> <index-tasks-json> — sandbox git repo with branch and a
+# .orch-lite/index.json carrying the given tasks map; echoes the repo path.
+reuse_repo() {
+  local d
+  d="$(fresh_git_repo "$1")" || return 1
+  mkdir -p "$d/.orch-lite"
+  printf '{"tasks": %s}' "$2" > "$d/.orch-lite/index.json"
+  printf '%s\n' "$d"
+}
+
 case_1_11() {
   dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" absent)"
   expect_deny "run_in_background"
@@ -248,22 +258,36 @@ case_1_12() {
   expect_deny "run_in_background"
 }
 
-# --- v5 dispatch gate: registry field + handbook-first instruction ---
+# --- v7 reuse loop: reuses required when the feature has index history ---
 
 case_1_13() {
-  # registry field missing -> deny naming exactly what to add
-  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"]}'
-  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_deny "registry"
-  case "$DV_STDERR" in *registry_reason*) : ;; *) printf 'deny must name the null+reason alternative\n'; return 1 ;; esac
+  # feature_id whose feature has index history, no reuses field -> deny ONCE
+  # with a digest of the prior entries (task ids + statuses + summaries)
+  local d pkg
+  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed", "objective": "first pass", "output": "did the first pass"}, "other-01": {"feature_id": "other", "status": "assigned"}}')" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "already has tasks in the index"
+  case "$DV_STDERR" in
+    *hist-01*completed*"did the first pass"*) : ;;
+    *) printf 'deny must carry the digest (id/status/summary), got:\n%s\n' "$DV_STDERR"; return 1 ;;
+  esac
+  case "$DV_STDERR" in
+    *other-01*) printf 'digest must only cover the feature own entries\n'; return 1 ;;
+  esac
+  case "$DV_STDERR" in
+    *"reuses"*"task_ids"*) : ;; *) printf 'deny must instruct re-sending with reuses\n'; return 1 ;;
+  esac
 }
 
 case_1_14() {
-  # registered id that is not in agents.json -> deny listing valid ids
-  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": "no-such-agent"}'
-  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_deny "not in agents.json"
-  case "$DV_STDERR" in *integrator*) : ;; *) printf 'deny must list valid ids\n'; return 1 ;; esac
+  # reuses naming an unknown task_id -> deny listing the valid index ids
+  local d pkg
+  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line", "reuses": ["ghost-id"]}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "unknown task_id"
+  case "$DV_STDERR" in *"hist-01"*) : ;; *) printf 'deny must name the valid ids\n'; return 1 ;; esac
 }
 
 case_1_15() {
@@ -274,38 +298,41 @@ case_1_15() {
 }
 
 case_1_16() {
-  # registry null without a registry_reason string -> deny
-  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": null}'
-  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_deny "registry_reason"
+  # reuses of the wrong shape (empty list / non-list) -> deny
+  local d pkg
+  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
+  for body in '[]' '"hist-01"' '[42]'; do
+    pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"feature_id\": \"hist-line\", \"reuses\": $body}"
+    dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+    expect_deny "non-empty list"
+  done
 }
 
 case_1_17() {
-  # agents.json missing in the project cwd -> deny with recreate/restore help
+  # feature_id with NO index history -> passes WITHOUT reuses (loop only fires
+  # when the feature already has entries); index exists but has no such feature
   local d pkg
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": "integrator"}'
+  d="$(reuse_repo feature/fresh-line '{"hist-01": {"feature_id": "other-feature", "status": "completed"}}')" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "fresh-line"}'
   dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_deny "missing or corrupt"
-  case "$DV_STDERR" in *"recreates it"*|*"restore it manually"*) : ;; *) printf 'deny must explain recreate/restore\n'; return 1 ;; esac
+  expect_pass
 }
 
 case_1_18() {
-  # agents.json corrupt -> deny with recreate/restore help
+  # valid reuses ids -> allow
   local d pkg
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  printf 'not json {{{' > "$d/agents.json"
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": "integrator"}'
+  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}, "hist-02": {"feature_id": "hist-line", "status": "failed"}}')" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line", "reuses": ["hist-01", "hist-02"]}'
   dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_deny "missing or corrupt"
+  expect_pass
 }
 
 case_1_19() {
-  # registered id + handbook line -> allow (repo root agents.json, cwd = repo)
-  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "registry": "integrator"}'
-  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  # package WITHOUT feature_id is unaffected by the reuse loop, even when the
+  # index is full of history
+  local d
+  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" true)"
   expect_pass
 }
 
@@ -315,7 +342,7 @@ case_1_20() {
   # A1: feature branch exists -> pass silently
   local d pkg
   d="$(fresh_git_repo feature/existing-line)" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "existing-line", "registry": null, "registry_reason": "probe"}'
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "existing-line"}'
   dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
 }
@@ -325,7 +352,7 @@ case_1_21() {
   # instruction for a new feature; fix the feature_id otherwise)
   local d pkg
   d="$(fresh_git_repo feature/other-line)" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "missing-line", "registry": null, "registry_reason": "probe"}'
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "missing-line"}'
   dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_deny "Branch feature/missing-line does not exist"
   case "$DV_STDERR" in
@@ -796,37 +823,25 @@ case_index_agent_id() {
 }
 
 case_index_agent_binding() {
-  # --agent on index create/update is the feature binding (two-layer model,
-  # agents.json > index): it MUST reference an id that exists in the project-root
-  # agents.json. Unknown id with readable agents.json -> error, exit 1, entry not
-  # created/binding unchanged. agents.json missing -> warn-only, binding recorded.
+  # The agents.json layer is REMOVED: index create/update carry --agent-id
+  # (plain metadata) only; entries never bind an agents.json registry id.
   local d out
   d="$(mktemp -d)" || return 1
   TMP_DIRS+=("$d")
   ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" init ) >/dev/null || return 1
-  printf '{"agents": [{"id": "integrator", "role": "ops"}]}' > "$d/agents.json"
 
-  # valid id -> bound at create, visible in index show
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-01 --role impl --feature-id fid --agent integrator ) >/dev/null || return 1
+  # --agent-id still recorded at create and update (plain metadata)
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-01 --role impl --feature-id fid --agent-id agent_at_create ) >/dev/null || return 1
   out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-01)" || return 1
-  grep -q '"agent": "integrator"' <<< "$out" || { printf 'show missing agent binding:\n%s\n' "$out"; return 1; }
+  grep -q '"agent_id": "agent_at_create"' <<< "$out" || { printf 'show missing agent_id:\n%s\n' "$out"; return 1; }
+  grep -q '"agent"' <<< "$out" && { printf 'registry agent field must be gone:\n%s\n' "$out"; return 1; }
 
-  # unknown id at create -> exit 1 with the agents.json > index reason; no entry
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-02 --role impl --feature-id fid --agent ghost 2>&1)" && { printf 'unknown agent id should fail create\n'; return 1; }
-  grep -q "not in agents.json" <<< "$out" || { printf 'create deny must name agents.json:\n%s\n' "$out"; return 1; }
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-02 ) >/dev/null 2>&1 && { printf 'rejected entry must not be created\n'; return 1; }
-
-  # unknown id at update -> exit 1, prior binding untouched
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index update --task-id impl-bind-01 --agent phantom 2>&1)" && { printf 'unknown agent id should fail update\n'; return 1; }
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-01)" || return 1
-  grep -q '"agent": "integrator"' <<< "$out" || { printf 'failed update must not clobber the binding:\n%s\n' "$out"; return 1; }
-
-  # agents.json absent -> warn-only, binding still recorded
-  local d2; d2="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d2")
-  ( cd "$d2" && python3 "$SKILL_DIR/scripts/multi-agent" init ) >/dev/null || return 1
-  out="$(cd "$d2" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-03 --role impl --feature-id fid --agent integrator 2>&1)" || { printf 'missing agents.json must degrade to warn-only\n'; return 1; }
-  grep -q "Warning: cannot validate" <<< "$out" || { printf 'expected warn-only line:\n%s\n' "$out"; return 1; }
+  # the agents.json validation is gone: any id (even unregistered) is accepted
+  # without a warning and lands as plain agent_id metadata
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-02 --role impl --agent-id ghost 2>&1)" || { printf '%s\n' "unregistered id must not fail create"; return 1; }
+  grep -q "Warning: cannot validate" <<< "$out" && { printf '%s\n' "registry validation must be gone"; return 1; }
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-02)" || return 1
+  grep -q '"agent_id": "ghost"' <<< "$out" || { printf '%s\n' "agent_id metadata missing"; return 1; }
 }
 
 # --- Python >= 3.9 parseability (the version guards' advertised minimum) ---
@@ -867,13 +882,13 @@ run_case "1.9    Task alias + valid package -> allow"     case_1_9
 run_case "1.10   branch-safe feature_id -> allow"         case_1_10
 run_case "1.11   background absent -> deny"               case_1_11
 run_case "1.12   run_in_background=false -> deny"         case_1_12
-run_case "1.13   registry field missing -> deny"          case_1_13
-run_case "1.14   unknown registry id -> deny"             case_1_14
+run_case "1.13   feature with index history, no reuses -> digest deny" case_1_13
+run_case "1.14   unknown reuses id -> deny naming valid ids"    case_1_14
 run_case "1.15   handbook-first missing -> deny"          case_1_15
-run_case "1.16   registry null w/o reason -> deny"        case_1_16
-run_case "1.17   agents.json missing -> deny + help"      case_1_17
-run_case "1.18   agents.json corrupt -> deny + help"      case_1_18
-run_case "1.19   registered id + handbook -> allow"       case_1_19
+run_case "1.16   reuses wrong shape -> deny"                   case_1_16
+run_case "1.17   feature with no index history -> pass w/o reuses" case_1_17
+run_case "1.18   valid reuses ids -> allow"                    case_1_18
+run_case "1.19   no feature_id -> reuse loop unaffected"      case_1_19
 run_case "1.20   v6 binding: branch exists -> pass"       case_1_20
 run_case "1.21   v6 binding: branch absent -> deny, both fixes" case_1_21
 run_case "1.22   v6 binding: no feature_id unaffected"    case_1_22
@@ -890,7 +905,7 @@ run_case "audit  session-init missing CLI -> exit 0"      case_si_audit_no_cli
 run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skillmd
 run_case "3.7    session-init unwritable cwd -> fallback, exit 0" case_si_unwritable_cwd
 run_case "3.8    CLI unwritable cwd: doctor/list/init human lines" case_cli_unwritable_cwd
-run_case "3.9    index --agent binding validated (agents.json > index)" case_index_agent_binding
+run_case "3.9    index --agent-id metadata kept, --agent flag gone" case_index_agent_binding
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
 run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate/cross-layout" case_doctor_drift
 run_case "MEM   memory_set traverses list indices, clean errors" case_mem_set_list
