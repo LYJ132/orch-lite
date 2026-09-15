@@ -795,6 +795,40 @@ case_index_agent_id() {
   grep -q '"agent_id": "agent_after_update"' <<< "$out" || { printf 'show missing updated agent_id:\n%s\n' "$out"; return 1; }
 }
 
+case_index_agent_binding() {
+  # --agent on index create/update is the feature binding (two-layer model,
+  # agents.json > index): it MUST reference an id that exists in the project-root
+  # agents.json. Unknown id with readable agents.json -> error, exit 1, entry not
+  # created/binding unchanged. agents.json missing -> warn-only, binding recorded.
+  local d out
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" init ) >/dev/null || return 1
+  printf '{"agents": [{"id": "integrator", "role": "ops"}]}' > "$d/agents.json"
+
+  # valid id -> bound at create, visible in index show
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-01 --role impl --feature-id fid --agent integrator ) >/dev/null || return 1
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-01)" || return 1
+  grep -q '"agent": "integrator"' <<< "$out" || { printf 'show missing agent binding:\n%s\n' "$out"; return 1; }
+
+  # unknown id at create -> exit 1 with the agents.json > index reason; no entry
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-02 --role impl --feature-id fid --agent ghost 2>&1)" && { printf 'unknown agent id should fail create\n'; return 1; }
+  grep -q "not in agents.json" <<< "$out" || { printf 'create deny must name agents.json:\n%s\n' "$out"; return 1; }
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-02 ) >/dev/null 2>&1 && { printf 'rejected entry must not be created\n'; return 1; }
+
+  # unknown id at update -> exit 1, prior binding untouched
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index update --task-id impl-bind-01 --agent phantom 2>&1)" && { printf 'unknown agent id should fail update\n'; return 1; }
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-01)" || return 1
+  grep -q '"agent": "integrator"' <<< "$out" || { printf 'failed update must not clobber the binding:\n%s\n' "$out"; return 1; }
+
+  # agents.json absent -> warn-only, binding still recorded
+  local d2; d2="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d2")
+  ( cd "$d2" && python3 "$SKILL_DIR/scripts/multi-agent" init ) >/dev/null || return 1
+  out="$(cd "$d2" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-03 --role impl --feature-id fid --agent integrator 2>&1)" || { printf 'missing agents.json must degrade to warn-only\n'; return 1; }
+  grep -q "Warning: cannot validate" <<< "$out" || { printf 'expected warn-only line:\n%s\n' "$out"; return 1; }
+}
+
 # --- Python >= 3.9 parseability (the version guards' advertised minimum) ---
 
 case_py39_parse() {
@@ -856,6 +890,7 @@ run_case "audit  session-init missing CLI -> exit 0"      case_si_audit_no_cli
 run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skillmd
 run_case "3.7    session-init unwritable cwd -> fallback, exit 0" case_si_unwritable_cwd
 run_case "3.8    CLI unwritable cwd: doctor/list/init human lines" case_cli_unwritable_cwd
+run_case "3.9    index --agent binding validated (agents.json > index)" case_index_agent_binding
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
 run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate/cross-layout" case_doctor_drift
 run_case "MEM   memory_set traverses list indices, clean errors" case_mem_set_list
