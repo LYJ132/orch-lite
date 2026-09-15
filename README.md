@@ -41,7 +41,18 @@ Claude Code adapter lives on the `feature/claude-code` branch. **Not yet verifie
 
 ---
 
-## Decoupling: Two Independent Timelines
+## Design Principles
+
+Orch-lite is built on three design principles:
+
+1. **Decoupling** — Agent execution and human conversation run on independent timelines. You keep working while code compiles, tests run, and diffs generate in the background. Your main session stays focused on intent and decisions, not execution logs.
+2. **Decisions Stay with the Human** — Machines work in parallel; key decisions — review, revise, integrate — remain human. You approve every checkpoint that matters.
+3. **Multi-Agent Is a Means, Not the Goal** — Background agents exist only to make decoupling possible. No swarm, no autonomous collaboration, no scheduler bloat.
+
+<details>
+<summary>Detailed design principles</summary>
+
+### 1. Decoupling: Two Independent Timelines
 
 A traditional Coding Agent interaction is a serial chain of alternating waits: the human makes a request, the agent executes, the human waits; the agent needs direction, the human decides — and so on. Human decisions and agent execution are bound to one timeline, with waiting baked into the interaction model rather than required by the work itself. Meanwhile, as sessions grow, execution content — code diffs, logs, test output, debugging traces — piles up and gradually turns a conversation meant for requirements and decisions into an execution log.
 
@@ -60,9 +71,7 @@ This separation brings two concrete forms of decoupling. **Context decoupling** 
 
 **Attention and cognitive decoupling** goes further. The main session becomes a space for thinking about goals, trade-offs, and next steps, rather than a place to stream what the agent just executed, what a command printed, or why a test failed. The latter is essential for execution, but it should not crowd out the conversation. When the main session stays focused on intent and direction, the agent can devote its attention to understanding real intent instead of burning context on execution detail.
 
----
-
-## Decisions Stay with the Human
+### 2. Decisions Stay with the Human
 
 Decoupling execution from interaction does not mean removing the human from the workflow.
 
@@ -81,9 +90,7 @@ The human decision flow is fully preserved. What changes is only this: **the hum
 
 What is reduced is waiting, not the human.
 
----
-
-## Multi-Agent Is a Means, Not the Goal
+### 3. Multi-Agent Is a Means, Not the Goal
 
 Background agents, task state, Git, and worktrees exist to serve the goals above. Orch-lite does not attempt to:
 
@@ -96,6 +103,8 @@ Background agents, task state, Git, and worktrees exist to serve the goals above
 The question it answers is: **why must a human stop working while an agent works?**
 
 Multi-agent is an implementation means, not a product goal.
+
+</details>
 
 ---
 
@@ -228,7 +237,18 @@ Claude Code 适配代码位于本仓库的 `feature/claude-code` 分支。**尚�
 
 ---
 
-## 解耦：两条独立的时间线
+## 设计理念
+
+Orch-lite 的三个设计理念：
+
+1. **解耦** — Agent 的执行与人的对话各自独立。你改需求、做设计的时候，代码编译、测试运行、diff 生成都在后台推进，主会话始终聚焦意图与决策，不被执行日志淹没。
+2. **决策权始终在人手中** — 机器并行工作，关键决策（审核、修订、整合）由人拍板。每一个重要的检查点都需要你的确认。
+3. **Multi-Agent 是手段，不是目的** — 后台 Agent 的存在只为让解耦成为可能。不追求 swarm、不搞自主协作、不做调度器大而全。
+
+<details>
+<summary>设计理念详解</summary>
+
+### 一、解耦：两条独立的时间线
 
 传统 Coding Agent 的交互是一条交替等待的链：人提出需求，Agent 执行，人等待；Agent 需要方向，人决定——如此循环。人的决策与 Agent 的执行被绑定在同一条时间线上，多数等待并非工作本身的要求，而是交互方式造成的结果。与此同时，随着会话不断增长，代码 diff、日志、测试输出、调试痕迹等执行内容持续堆积，原本用于承载需求、想法和决策的对话，逐渐退化为 Agent 的执行日志。
 
@@ -243,15 +263,11 @@ Orch-lite 的关键不在于增加 Agent 的数量，而在于**让人的工作�
 
 两条时间线不再同步：人的决策流程保持连续，Agent 的执行在后台并行推进。
 
-这种分离带来两个具体的解耦层次。
-
-**上下文解耦**让主会话保持整洁：用户需求、想法、方向、问题、决策与审核结果留在对话中，文件修改、工具调用、测试、日志、调试与执行细节则由后台 Agent 承载。执行细节依然存在、可被任务系统追踪，却不再占据交流的主要空间——主会话上下文更干净、冗余执行内容更少、长会话更易维持，并在适当场景下降低 Token 消耗。Token 节省是上下文解耦的结果，而非设计目标。
+这种分离带来两个具体的解耦层次。**上下文解耦**让主会话保持整洁：用户需求、想法、方向、问题、决策与审核结果留在对话中，文件修改、工具调用、测试、日志、调试与执行细节则由后台 Agent 承载。执行细节依然存在、可被任务系统追踪，却不再占据交流的主要空间——主会话上下文更干净、冗余执行内容更少、长会话更易维持，并在适当场景下降低 Token 消耗。Token 节省是上下文解耦的结果，而非设计目标。
 
 **注意力与认知解耦**更进一步。主会话应是讨论目标、取舍与下一步的空间，而不是实时播报 Agent 刚执行了什么、某条命令输出了什么、某个测试为何失败。后者对执行至关重要，却不应持续占据交流的中心。当主会话聚焦于意图与方向时，Agent 也能将更多注意力用于理解真实意图，而非在执行细节中消耗上下文。
 
----
-
-## 决策权始终在人手中
+### 二、决策权始终在人手中
 
 执行与交互的解耦，并不意味着将人移出工作流。
 
@@ -270,9 +286,7 @@ Agent A、Agent B 执行中
 
 减少的是等待，不是人。
 
----
-
-## Multi-Agent 是手段，不是目的
+### 三、Multi-Agent 是手段，不是目的
 
 后台 Agent、任务状态、Git、worktree 等机制，服务于上述目标而存在。Orch-lite 并不试图：
 
@@ -285,6 +299,8 @@ Agent A、Agent B 执行中
 它要回答的问题是：**Agent 工作时，人为什么必须停止工作？**
 
 Multi-Agent 是实现手段，而非产品目标。
+
+</details>
 
 ---
 
