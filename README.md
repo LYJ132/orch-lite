@@ -41,81 +41,11 @@ Claude Code adapter lives on the `feature/claude-code` branch. **Not yet verifie
 
 ---
 
-## The Problem: Two-Way Blocking in a Serial Interaction
-
-A traditional Coding Agent interaction is a serial process:
-
-```
-Human makes a request
-        ↓
-Agent starts executing
-        ↓
-Human waits for the agent
-        ↓
-Agent finishes
-        ↓
-Human reviews the result
-        ↓
-Human makes the next request
-```
-
-Natural as it looks, this flow blocks in both directions.
-
-### The human waits for the agent
-
-While the agent modifies code, runs tests, or debugs, the human can usually only wait — but thinking does not stop. During the wait, the human may already have:
-
-- formed a new requirement;
-- spotted a flaw in the current approach;
-- needed to ask about a concept;
-- needed to schedule another independent piece of work;
-- been ready to start the next task.
-
-Yet the agent is still executing. **The agent's execution time becomes the human's waiting time.**
-
-### The agent also waits for the human
-
-The blocking runs the other way too. During execution, agents regularly need a human to:
-
-- provide direction;
-- answer a question;
-- confirm a plan;
-- decide the next step;
-- review a result.
-
-The traditional flow is therefore a chain of alternating waits:
-
-```
-Human → Agent → Human → Agent → Human → Agent
-```
-
-**Human decisions and agent execution are bound to one timeline.** The human must wait for the agent, and the agent must wait for the human. Most of this waiting is not required by the work itself — it is an artifact of the interaction model.
-
----
-
-## Long Sessions Are Polluted by Execution Content
-
-A typical coding-agent session grows continuously:
-
-```
-Request → Analysis → Tool calls → Edits → Terminal output
-   → Tests → Errors → Debugging → Re-edits → Re-tests → ...
-```
-
-This content is indispensable for finishing the current task, but it is not the most important information for an ongoing conversation. As work progresses, the main session accumulates:
-
-- code and diffs;
-- logs and test results;
-- debugging traces and tool calls;
-- transient errors and large amounts of execution detail.
-
-The result: **a session meant to carry requirements, ideas, and decisions gradually degenerates into the agent's execution log.** It hurts readability and inflates the context.
-
----
-
 ## Decoupling: Two Independent Timelines
 
-The point of Orch-lite is not more agents, but **giving the human workflow and agent execution two independent timelines.**
+A traditional Coding Agent interaction is a serial chain of alternating waits: the human makes a request, the agent executes, the human waits; the agent needs direction, the human decides — and so on. Human decisions and agent execution are bound to one timeline, with waiting baked into the interaction model rather than required by the work itself. Meanwhile, as sessions grow, execution content — code diffs, logs, test output, debugging traces — piles up and gradually turns a conversation meant for requirements and decisions into an execution log.
+
+Orch-lite's response is not more agents, but **giving the human workflow and agent execution two independent timelines.**
 
 ![Orch-lite: two decoupled timelines](docs/orch-lite.png)
 
@@ -124,62 +54,7 @@ The diagram compares the two interactions:
 - **Top (traditional):** the agent's Task A/B/C and the human's Read & Send blocks are serially staggered — the human waits while a task runs, and the agent starts the next task only after the human sends a message. Both sides wait on each other.
 - **Bottom (Orch-lite):** Task A/B/C form a continuous pipeline, with the human's Send and Read & Send blocks interleaved with task execution. The agent keeps advancing, and the human keeps working.
 
-The two timelines are no longer synchronized: the human's decision flow stays continuous while agent execution proceeds in parallel in the background.
-
----
-
-## Three Levels of Decoupling
-
-### Workflow decoupling
-
-While an agent executes a task, the human does not need to stop working.
-
-```
-Human workflow:  ─────────────────────────────→
-Agent A:         ──────────→
-Agent B:              ─────────────→
-Agent C:                   ───────────→
-```
-
-Agent execution time is no longer equivalent to human waiting time.
-
-Waiting does not disappear entirely: live searches, complex discussions, and pending human decisions still require the main session. What Orch-lite does is **move unnecessary waiting out of the human workflow.**
-
-### Context decoupling
-
-The details needed to execute a task no longer pile up in the main session:
-
-```
-Main session                 Background agent
-├── Requirements             ├── File edits
-├── Ideas                    ├── Tool calls
-├── Direction                ├── Tests
-├── Questions                ├── Logs
-├── Decisions                ├── Debugging
-└── Review results           └── Execution detail
-```
-
-The main session stays clean. Execution detail still exists and is tracked by the task system, but it no longer occupies the center of the conversation. This yields a cleaner main-session context, less redundant execution content, longer-lived sessions, and — in suitable cases — lower token consumption. Token savings are a consequence of context decoupling, not the design goal.
-
-### Attention and cognitive decoupling
-
-The main session should carry questions like:
-
-- What is the goal?
-- Why do it this way?
-- Where is the direction?
-- What are the open problems?
-- What are the trade-offs?
-- What is the next step?
-
-Not:
-
-- What did the agent just execute?
-- What did that command print?
-- Why did that test fail?
-- What happened on a specific line of a specific file?
-
-The latter is essential for execution, but it should not occupy the center of the conversation. **The main session is a space for thinking, not an execution log.** When it is focused on requirements, direction, and decisions, the agent can devote its attention to understanding real intent rather than burning context on execution detail.
+The two timelines are no longer synchronized: the human's decision flow stays continuous while agent execution proceeds in parallel in the background. This separation brings two concrete forms of decoupling. Context decoupling keeps the main session clean: requirements, ideas, direction, questions, decisions, and review results stay in the conversation, while file edits, tool calls, tests, logs, debugging, and execution detail live with the background agent. Execution detail still exists and is tracked by the task system, but it no longer occupies the center of the conversation — yielding a cleaner main-session context, less redundant execution content, longer-lived sessions, and in suitable cases lower token consumption. Token savings are a consequence, not the goal. Attention and cognitive decoupling goes further: the main session becomes a space for thinking about goals, trade-offs, and next steps, rather than a place to stream what the agent just executed, what a command printed, or why a test failed. The latter is essential for execution, but it should not crowd out the conversation. When the main session stays focused on intent and direction, the agent can devote its attention to understanding real intent instead of burning context on execution detail.
 
 ---
 
