@@ -50,7 +50,7 @@ Routing default (Step 0's decomposition check): for independent work — ≥2 wo
 This is a "blunt" gate: it cannot see *which file* another child is writing, so concurrent-but-disjoint tasks are still worktreed. That over-isolation is one cheap `git worktree add`; the alternative (a per-file occupancy table that lets us know exactly who holds which file) is precisely the `files`/`git` occupancy tracking we retired — not worth the lifecycle cost. Zero new mechanism.
 
 ### 1.12 Shared Resources Are Protected by Mechanisms, Not Memory
-- Shared-memory writes are serialized by a flock the CLI takes internally on `multi-agent/memory/.lock`; agents just call the CLI
+- Shared-memory writes are serialized by a flock the CLI takes internally on `.orch-lite/memory.lock`; agents just call the CLI
 
 ### 1.13 Experiences Are Cast Directly Into Contracts
 No separate SOP layer. Record-time decision (N18): if it can be condensed into a "must-follow" rule/flow → contract; one-off → experience; **unsure → ask the user**.
@@ -168,4 +168,4 @@ Extensions: user appends as needed; main agent proposes → user confirms.
 | >3 heterogeneous parallel packages | User confirms each one's purpose/prompt/acceptance |
 | Multiple homogeneous packages | No approval; dispatch directly |
 | Parallel dispatch | ≥2 disjoint-scope packages with no dependency → same-turn parallel Agent calls, `run_in_background: true` |
-| Required info | task_id, role, objective, acceptance_criteria (+ `feature_id`) |
+| Required info | task_id, role, objective, acceptance_criteria (+ `feature_id` — a MUST binding the dispatch to branch `feature/<feature_id>`; generic unbound dispatches stay valid via omitting it; `reuses` required when the feature already has index entries) |

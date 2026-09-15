@@ -46,7 +46,7 @@ HANDOFF_PLAN from=main to=impl-20260911-01,test-20260911-02 artifact="After the 
 
 ## 4. Dispatch Package Format (main → child)
 
-**4 required fields + 1 optional**. No `instance_id`: `task_id` is the sole identity.
+**4 required fields + `feature_id` (MUST in every dispatch)**. No `instance_id`: `task_id` is the sole identity.
 
 ### 4.1 FORMAT MANDATE — fenced JSON block
 The dispatch prompt MUST embed the package as a fenced JSON block:
@@ -58,6 +58,10 @@ The dispatch prompt MUST embed the package as a fenced JSON block:
 **Rationale**: machine-parseable, so a PreToolUse hook validates it reliably (field presence, well-formed JSON) instead of sniffing prose; it is also the anchor for reuse references (same-feature tasks point back to the exact package that produced the branch history).
 
 **What the dispatch prompt carries**: the JSON block + **at most 3 lines of pointers** (paths/constraints). Never re-paste process text, contracts, feature background or memory — the child pulls those from files (index / memory / git log / SKILL.md); the standard flow (§5) is OWNED by this file, and repeating it per dispatch is drift. The main session never sends mid-flight messages to a running child.
+
+**Reuse-first composition (MUST)**: before composing any dispatch, read the feature's index history (`python3 scripts/multi-agent index show --feature-id <fid>`) and the feature-branch history when it exists. There is no agents.json registry and no role pre-definitions: the package's `objective` + `acceptance_criteria` ARE the agent's definition — shape them per task, folding in what prior entries teach. Every dispatch package's first instruction to the child is: `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`. The reuse loop refines dispatch composition only — routing (three states, 5 invariants) is unchanged.
+
+**Reuse loop (hook-enforced)**: when `.orch-lite/index.json` already has entries for the package's `feature_id`, the package MUST carry a `reuses` field — a list of the index task_ids the main session has read before composing. The dispatch-validate hook denies a dispatch that omits `reuses` (with a digest of the prior entries: task ids, statuses, one-line summaries) and denies any unknown id, naming the valid ones. A feature with no index history needs no `reuses`; packages without a `feature_id` are unaffected. The hook is stateless, so the rule is uniform — every dispatch whose feature has index history carries `reuses`; the first is denied exactly once, which teaches the requirement.
 
 **Child death**: a child that stops or fails is re-dispatched under a new task_id or reported to the user — the main session never absorbs the work itself.
 
@@ -72,7 +76,8 @@ The dispatch prompt MUST embed the package as a fenced JSON block:
 | `role` | string | yes | functional role (test/research/impl/review/debug/docs/deploy/custom) |
 | `objective` | string | yes | specific, executable, verifiable |
 | `acceptance_criteria` | string[] | yes | confirmed before dispatch; the executor self-checks each |
-| `feature_id` | string | no | branch `feature/<feature_id>` & worktree; main-inferred, user-confirmed, reused |
+| `feature_id` | string | MUST | branch `feature/<feature_id>` & worktree; main-inferred, user-confirmed, reused. MUST in every dispatch: binds the package to one feature line's recorded state (branch + index + memory) so related work reuses it. The dispatch-validate hook checks the branch at dispatch time: absent → deny with two fixes — (i) NEW feature → include an explicit instruction for the child to create branch `feature/<feature_id>` from the current mainline HEAD; (ii) otherwise fix the `feature_id`. Generic (unbound) dispatches stay valid: omit `feature_id`. Before composing, the main session reads the feature's index entries (`python3 scripts/multi-agent index show --feature-id <fid>`) so their recorded conclusions shape the objective. |
+| `reuses` | string[] | conditional | Required whenever the index already has entries for the package's `feature_id`: the index task_ids the main session has read before composing. The hook validates every id (unknown → deny, naming the valid ones) and denies the omission once with a digest of the prior entries. No index history → not required. |
 
 ---
 
@@ -116,7 +121,7 @@ Parallelism is the default for independent work; serial is justified only by a N
 | Trigger threshold | **only** when a problem cost unusual time/energy to crack | any condensed recurring law / flow that avoids a high-frequency problem |
 | Storage | `shared.json` `experiences[]` | `shared.json` `contracts[]` |
 
-Write via `memory append --array experiences|contracts --entry <JSON>`; the CLI takes an internal flock on `multi-agent/memory/.lock` (N17).
+Write via `memory append --array experiences|contracts --entry <JSON>`; the CLI takes an internal flock on `.orch-lite/memory.lock` (N17).
 
 **Reading rule (the other half of the loop — hidden cost if skipped)**: memory written but never read is sunk cost. Any agent — child or main — **when hitting a hard / non-obvious problem, read `experiences` first** before re-deriving from scratch. Dispatch context tells the child where to look (§5); the main agent is reminded in SKILL.md.
 

@@ -2,7 +2,7 @@
 # tests/run.sh — executable counterpart of the manual matrix in tests/hooks.md.
 #
 # Self-contained: no network, no writes outside mktemp -d sandboxes (negative
-# paths never touch the real multi-agent/ runtime state; running session-init
+# paths never touch the real .orch-lite/ runtime state; running session-init
 # inside the repo is idempotent by design — init creates-if-missing, list and
 # doctor are pure reads).
 #
@@ -119,8 +119,24 @@ PY
 
 PKG_OK='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"]}'
 
-fenced_prompt() {  # $1=fenced payload content
+# Handbook-first line every dispatch prompt must carry (v5 gate).
+HANDBOOK_LINE='MANDATORY FIRST ACTION: read skills/orch-lite-executor/SKILL.md (your handbook).'
+
+fenced_prompt() {  # $1=fenced payload content; appends the handbook-first line
+  printf 'context line\n\n```json\n%s\n```\n\n%s\n' "$1" "$HANDBOOK_LINE"
+}
+
+fenced_prompt_nohb() {  # same, WITHOUT the handbook-first line (gate-negative)
   printf 'context line\n\n```json\n%s\n```\n' "$1"
+}
+
+# Run dispatch-validate from a different cwd (the gate resolves the
+# .orch-lite index from the process cwd = project root, as in a live session).
+dv_run_in() {  # $1=cwd, $2=event json
+  ( cd "$1" && printf '%s' "$2" | python3 "$SKILL_DIR/hooks/dispatch-validate.py" 2>"$DV_ERR_FILE" )
+  DV_RC=$?
+  DV_STDOUT=""
+  DV_STDERR="$(cat "$DV_ERR_FILE")"
 }
 
 # --- frontmatter ---
@@ -167,7 +183,7 @@ case_1_5() {
 }
 
 case_1_6() {
-  local pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"instance_id\": \"retired-ignorer\"}"
+  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "instance_id": "retired-ignorer"}'
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
 }
@@ -201,9 +217,35 @@ case_1_9() {
 }
 
 case_1_10() {
-  local pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"feature_id\": \"payment\"}"
-  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  # branch-safe feature_id + existing feature branch -> allow (v6 binding:
+  # run in a sandbox repo where refs/heads/feature/payment exists)
+  local d pkg
+  d="$(fresh_git_repo feature/payment)" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "payment"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
+}
+
+# fresh_git_repo <branch> — sandbox git repo on main with one commit and
+# <branch> (refs/heads/<branch>) created; echoes the repo path.
+fresh_git_repo() {
+  local d
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  git -C "$d" init -q -b main || return 1
+  git -C "$d" -c user.name=t -c user.email=t@l commit -q --allow-empty -m base || return 1
+  git -C "$d" branch -q "$1" || return 1
+  printf '%s\n' "$d"
+}
+
+# reuse_repo <branch> <index-tasks-json> — sandbox git repo with branch and a
+# .orch-lite/index.json carrying the given tasks map; echoes the repo path.
+reuse_repo() {
+  local d
+  d="$(fresh_git_repo "$1")" || return 1
+  mkdir -p "$d/.orch-lite"
+  printf '{"tasks": %s}' "$2" > "$d/.orch-lite/index.json"
+  printf '%s\n' "$d"
 }
 
 case_1_11() {
@@ -214,6 +256,143 @@ case_1_11() {
 case_1_12() {
   dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" false)"
   expect_deny "run_in_background"
+}
+
+# --- v7 reuse loop: reuses required when the feature has index history ---
+
+case_1_13() {
+  # feature_id whose feature has index history, no reuses field -> deny ONCE
+  # with a digest of the prior entries (task ids + statuses + summaries)
+  local d pkg
+  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed", "objective": "first pass", "output": "did the first pass"}, "other-01": {"feature_id": "other", "status": "assigned"}}')" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "already has tasks in the index"
+  case "$DV_STDERR" in
+    *hist-01*completed*"did the first pass"*) : ;;
+    *) printf 'deny must carry the digest (id/status/summary), got:\n%s\n' "$DV_STDERR"; return 1 ;;
+  esac
+  case "$DV_STDERR" in
+    *other-01*) printf 'digest must only cover the feature own entries\n'; return 1 ;;
+  esac
+  case "$DV_STDERR" in
+    *"reuses"*"task_ids"*) : ;; *) printf 'deny must instruct re-sending with reuses\n'; return 1 ;;
+  esac
+}
+
+case_1_14() {
+  # reuses naming an unknown task_id -> deny listing the valid index ids
+  local d pkg
+  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line", "reuses": ["ghost-id"]}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "unknown task_id"
+  case "$DV_STDERR" in *"hist-01"*) : ;; *) printf 'deny must name the valid ids\n'; return 1 ;; esac
+}
+
+case_1_15() {
+  # no handbook-first instruction -> deny
+  dv_run "$(agent_event Agent "$(fenced_prompt_nohb "$PKG_OK")" true)"
+  expect_deny "handbook-first instruction"
+  case "$DV_STDERR" in *skills/orch-lite-executor/SKILL.md*) : ;; *) printf 'deny must name the handbook path\n'; return 1 ;; esac
+}
+
+case_1_16() {
+  # reuses of the wrong shape (empty list / non-list) -> deny
+  local d pkg
+  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
+  for body in '[]' '"hist-01"' '[42]'; do
+    pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"feature_id\": \"hist-line\", \"reuses\": $body}"
+    dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+    expect_deny "non-empty list"
+  done
+}
+
+case_1_17() {
+  # feature_id with NO index history -> passes WITHOUT reuses (loop only fires
+  # when the feature already has entries); index exists but has no such feature
+  local d pkg
+  d="$(reuse_repo feature/fresh-line '{"hist-01": {"feature_id": "other-feature", "status": "completed"}}')" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "fresh-line"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
+}
+
+case_1_18() {
+  # valid reuses ids -> allow
+  local d pkg
+  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}, "hist-02": {"feature_id": "hist-line", "status": "failed"}}')" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line", "reuses": ["hist-01", "hist-02"]}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
+}
+
+case_1_19() {
+  # package WITHOUT feature_id is unaffected by the reuse loop, even when the
+  # index is full of history
+  local d
+  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" true)"
+  expect_pass
+}
+
+# --- v6 feature-branch binding (packages WITH a feature_id only) ---
+
+case_1_20() {
+  # A1: feature branch exists -> pass silently
+  local d pkg
+  d="$(fresh_git_repo feature/existing-line)" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "existing-line"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
+}
+
+case_1_21() {
+  # A1: feature branch absent -> deny naming BOTH fixes (create-branch
+  # instruction for a new feature; fix the feature_id otherwise)
+  local d pkg
+  d="$(fresh_git_repo feature/other-line)" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "missing-line"}'
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "Branch feature/missing-line does not exist"
+  case "$DV_STDERR" in
+    *"create branch feature/missing-line from the current mainline HEAD"*) : ;;
+    *) printf 'deny lacks the NEW-feature create-branch fix\n'; return 1 ;;
+  esac
+  case "$DV_STDERR" in
+    *"fix the feature_id"*) : ;;
+    *) printf 'deny lacks the fix-the-feature_id fix\n'; return 1 ;;
+  esac
+}
+
+case_1_22() {
+  # A1: package WITHOUT feature_id is unaffected by the binding gate, even
+  # outside any git repo (fail-open for git, no deny)
+  local d pkg
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  pkg="$PKG_OK"
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
+}
+
+case_route_must() {
+  # B: Step 0 routing line is a hard MUST; self-repair clause and the three
+  # routing states stay in the Request Routing section.
+  python3 - "$SKILL_MD" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+start = src.index("## Request Routing")
+end = src.index("## ", start + 5)
+section = src[start:end].replace("**", "")
+assert "MUST output exactly one `[routing] ...` line as the first line of every reply" in section, \
+    "routing MUST line missing"
+assert "Self-repair." in section, "self-repair clause missing"
+for state in ("[routing] chat → handle directly",
+              "[routing] task → single dispatch",
+              "[routing] orchestration → enable index+worktrees"):
+    assert state in section, f"routing state missing: {state}"
+PY
 }
 
 # Fail-soft audit probe: structurally broken tool_input payloads must yield
@@ -234,13 +413,13 @@ case_3_1() {
   python3 - "$d" <<'PY'
 import json, sys, pathlib
 d = pathlib.Path(sys.argv[1])
-ma = d / "multi-agent"
-for p in ("index.json", "memory/shared.json"):
+ma = d / ".orch-lite"
+for p in ("index.json", "memory.json"):
     if not (ma / p).is_file():
         sys.exit(f"missing {p}")
 if not (d / ".git").exists():
     sys.exit("git not bootstrapped")
-mem = json.loads((ma / "memory" / "shared.json").read_text())
+mem = json.loads((ma / "memory.json").read_text())
 for key in ("common_knowledge", "experiences", "task_patterns", "contracts"):
     assert key in mem, f"memory lacks {key}"
 ctx = json.loads((d / "o.json").read_text())["additionalContext"]
@@ -461,7 +640,7 @@ case_doctor() {
   # DIRECTLY on main surfaces as main-violation; the same commit reaching main
   # through the main agent's --no-ff merge (second parent) must NOT — the scan
   # is first-parent. doctor always exits 0. Sandboxes are mktemp -d, fully
-  # independent of this repo's history and multi-agent/ state.
+  # independent of this repo's history and .orch-lite/ state.
   local dir out
 
   # (a) direct task commit on main -> violation
@@ -469,7 +648,7 @@ case_doctor() {
   TMP_DIRS+=("$dir")
   git -C "$dir" init -q -b main || return 1
   git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
-  mkdir -p "$dir/multi-agent" && printf '{"tasks": {}}' > "$dir/multi-agent/index.json" || return 1
+  mkdir -p "$dir/.orch-lite" && printf '{"tasks": {}}' > "$dir/.orch-lite/index.json" || return 1
   git -C "$dir" -c user.name=ops-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work committed on main" || return 1
   out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
@@ -480,7 +659,7 @@ case_doctor() {
   TMP_DIRS+=("$dir")
   git -C "$dir" init -q -b main || return 1
   git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
-  mkdir -p "$dir/multi-agent" && printf '{"tasks": {}}' > "$dir/multi-agent/index.json" || return 1
+  mkdir -p "$dir/.orch-lite" && printf '{"tasks": {}}' > "$dir/.orch-lite/index.json" || return 1
   git -C "$dir" checkout -q -b feature/demo || return 1
   git -C "$dir" -c user.name=impl-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work on feature branch" || return 1
   git -C "$dir" checkout -q main || return 1
@@ -502,9 +681,9 @@ case_doctor_drift() {
   root="$(mktemp -d)" || return 1
   TMP_DIRS+=("$root")
   dir="$root/repo"; copy="$root/copy"
-  mkdir -p "$dir"/{hooks,references,scripts,tests} "$copy" "$dir/multi-agent" || return 1
+  mkdir -p "$dir"/{hooks,references,scripts,tests} "$copy" "$dir/.orch-lite" || return 1
   printf '# skill\n' > "$dir/SKILL.md"
-  printf 'multi-agent/\n.worktrees/\n' > "$dir/.gitignore"
+  printf '.orch-lite/\n.worktrees/\n' > "$dir/.gitignore"
   printf 'print("hook")\n' > "$dir/hooks/session-init.py"
   printf '# state\n' > "$dir/references/03-state.md"
   cp "$SKILL_DIR/scripts/multi-agent" "$dir/scripts/multi-agent" || return 1   # the gate wants a skill-shaped HEAD
@@ -513,7 +692,7 @@ case_doctor_drift() {
   git -C "$dir" init -q -b main || return 1
   git -C "$dir" add -A || return 1
   git -C "$dir" -c user.name=t -c user.email=t@l commit -qm base || return 1
-  printf '{"tasks": {}}' > "$dir/multi-agent/index.json" || return 1
+  printf '{"tasks": {}}' > "$dir/.orch-lite/index.json" || return 1
   cp -r "$dir/hooks" "$dir/references" "$dir/scripts" "$dir/tests" "$dir/SKILL.md" "$dir/.gitignore" "$copy/" || return 1
 
   # (a) identical copy -> no drift finding
@@ -555,9 +734,9 @@ case_doctor_drift() {
   # path; a plugin-form copy matches the same way.
   local prepo pcopy2
   prepo="$root/prepo"; pcopy2="$root/pcopy"
-  mkdir -p "$prepo"/{hooks,references,scripts,tests,skills/orch-lite} "$prepo/multi-agent" "$pcopy2" || return 1
+  mkdir -p "$prepo"/{hooks,references,scripts,tests,skills/orch-lite} "$prepo/.orch-lite" "$pcopy2" || return 1
   printf '# skill\n' > "$prepo/skills/orch-lite/SKILL.md"
-  printf 'multi-agent/\n.worktrees/\n' > "$prepo/.gitignore"
+  printf '.orch-lite/\n.worktrees/\n' > "$prepo/.gitignore"
   printf 'print("hook")\n' > "$prepo/hooks/session-init.py"
   printf '# state\n' > "$prepo/references/03-state.md"
   cp "$SKILL_DIR/scripts/multi-agent" "$prepo/scripts/multi-agent" || return 1
@@ -565,7 +744,7 @@ case_doctor_drift() {
   git -C "$prepo" init -q -b main || return 1
   git -C "$prepo" add -A || return 1
   git -C "$prepo" -c user.name=t -c user.email=t@l commit -qm base || return 1
-  printf '{"tasks": {}}' > "$prepo/multi-agent/index.json" || return 1
+  printf '{"tasks": {}}' > "$prepo/.orch-lite/index.json" || return 1
   cp -r "$prepo/hooks" "$prepo/references" "$prepo/scripts" "$prepo/tests" "$prepo/.gitignore" "$pcopy2/" || return 1
   cp "$prepo/skills/orch-lite/SKILL.md" "$pcopy2/SKILL.md" || return 1
 
@@ -643,6 +822,28 @@ case_index_agent_id() {
   grep -q '"agent_id": "agent_after_update"' <<< "$out" || { printf 'show missing updated agent_id:\n%s\n' "$out"; return 1; }
 }
 
+case_index_agent_binding() {
+  # The agents.json layer is REMOVED: index create/update carry --agent-id
+  # (plain metadata) only; entries never bind an agents.json registry id.
+  local d out
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" init ) >/dev/null || return 1
+
+  # --agent-id still recorded at create and update (plain metadata)
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-01 --role impl --feature-id fid --agent-id agent_at_create ) >/dev/null || return 1
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-01)" || return 1
+  grep -q '"agent_id": "agent_at_create"' <<< "$out" || { printf 'show missing agent_id:\n%s\n' "$out"; return 1; }
+  grep -q '"agent"' <<< "$out" && { printf 'registry agent field must be gone:\n%s\n' "$out"; return 1; }
+
+  # the agents.json validation is gone: any id (even unregistered) is accepted
+  # without a warning and lands as plain agent_id metadata
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-02 --role impl --agent-id ghost 2>&1)" || { printf '%s\n' "unregistered id must not fail create"; return 1; }
+  grep -q "Warning: cannot validate" <<< "$out" && { printf '%s\n' "registry validation must be gone"; return 1; }
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-02)" || return 1
+  grep -q '"agent_id": "ghost"' <<< "$out" || { printf '%s\n' "agent_id metadata missing"; return 1; }
+}
+
 # --- Python >= 3.9 parseability (the version guards' advertised minimum) ---
 
 case_py39_parse() {
@@ -681,6 +882,17 @@ run_case "1.9    Task alias + valid package -> allow"     case_1_9
 run_case "1.10   branch-safe feature_id -> allow"         case_1_10
 run_case "1.11   background absent -> deny"               case_1_11
 run_case "1.12   run_in_background=false -> deny"         case_1_12
+run_case "1.13   feature with index history, no reuses -> digest deny" case_1_13
+run_case "1.14   unknown reuses id -> deny naming valid ids"    case_1_14
+run_case "1.15   handbook-first missing -> deny"          case_1_15
+run_case "1.16   reuses wrong shape -> deny"                   case_1_16
+run_case "1.17   feature with no index history -> pass w/o reuses" case_1_17
+run_case "1.18   valid reuses ids -> allow"                    case_1_18
+run_case "1.19   no feature_id -> reuse loop unaffected"      case_1_19
+run_case "1.20   v6 binding: branch exists -> pass"       case_1_20
+run_case "1.21   v6 binding: branch absent -> deny, both fixes" case_1_21
+run_case "1.22   v6 binding: no feature_id unaffected"    case_1_22
+run_case "ROUTE  Step 0 routing line is a MUST (B)"       case_route_must
 run_case "audit  dispatch-validate broken shapes"         case_1_audit_shapes
 run_case "3.1    fresh project bootstrap (temp copy)"     case_3_1
 run_case "3.2    populated index injected (temp copy)"    case_3_2
@@ -693,6 +905,7 @@ run_case "audit  session-init missing CLI -> exit 0"      case_si_audit_no_cli
 run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skillmd
 run_case "3.7    session-init unwritable cwd -> fallback, exit 0" case_si_unwritable_cwd
 run_case "3.8    CLI unwritable cwd: doctor/list/init human lines" case_cli_unwritable_cwd
+run_case "3.9    index --agent-id metadata kept, --agent flag gone" case_index_agent_binding
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
 run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate/cross-layout" case_doctor_drift
 run_case "MEM   memory_set traverses list indices, clean errors" case_mem_set_list

@@ -19,7 +19,7 @@ cases the skill does not define; record what you observe.
 | Session | Open in | Acts | Why |
 |---|---|---|---|
 | A (fresh) | `~` (any non-repo directory) | 0 → 1 → 2 → 3 → 4 → 5 | routing against out-of-repo targets; act 1 must be the first message of a fresh session (SessionStart fires once) |
-| B (fresh) | `~/.zcode/skills/orch-lite` | 6 → 7 | repo-internal work: feature branches, worktrees, integration merges, hook enforcement |
+| B (fresh) | `~/.zcode/skills/orch-lite` | 6 → 7 → 10 | repo-internal work: feature branches, worktrees, integration merges, hook enforcement |
 | C (or continue B) | any | 8 → 9 | destructive finale, then the closing audit (act 9 is a plain shell, no ZCode needed) |
 
 - One act at a time, in order; each act's expectations assume the previous ones ran.
@@ -67,7 +67,7 @@ clear`), `--- Request Routing (from SKILL.md) ---`, and `--- Dispatch Package (M
 
 ```bash
 # from anywhere: init bootstrapped the runtime next to wherever session A was opened
-ls ~/multi-agent/          # index.json  memory/
+ls ~/.orch-lite/          # index.json  memory.json
 ```
 
 In-session: check the exact markers above are present (the two `(from SKILL.md)` sections are
@@ -379,6 +379,41 @@ Notes on honest judging:
 
 **Pass** — index all-completed, no new doctor findings, no task_id-authored first-parent commits, no worktree leftovers, remote matches local within the stated delta. **Fail** — any stuck index entry, any new doctor finding, any direct-to-main task commit, or a local/remote mismatch beyond that delta.
 
+## Act 10 — Same-feature dispatch exercises the reuse loop (reuses required)
+
+**Purpose.** Prove the reuse loop (the one reuse guarantee): a dispatch whose `feature_id` already has index entries is denied ONCE with a digest of the prior entries, and the re-sent package carries `reuses` — with no agents.json registry and no role pre-definitions anywhere (the package's objective/acceptance_criteria ARE the agent's definition).
+
+**Setup.** Feature `<fid>` already has completed tasks in the index (`index show --feature-id <fid>` shows them); branch `feature/<fid>` exists.
+
+**User's input** (session B, repo-internal, all feature tasks of `<fid>` completed, follow-up work needed):
+
+```
+把 <fid> 的登录 500 再查一下，补上上个任务留下的回归测试
+```
+
+**Expected routing line.** First line: `[routing] task → single dispatch to impl-<id> (run_in_background=true)` — a single package on the existing feature line.
+
+**Expected behavior.** The main agent reads the feature's index entries BEFORE composing, and the dispatch package carries:
+
+- identity line + the standard abbreviated MUST block;
+- the fenced-JSON package with this task's `task_id`, `role: impl`, an `objective`/`acceptance_criteria` pair shaped from what the prior entries teach (not a re-derived preamble), `feature_id: "<fid>"`, and `"reuses": [<the index task_ids the main session actually read>]`;
+- as its **first instruction to the child**: `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`.
+
+If the first composition omits `reuses`, the dispatch-validate hook blocks the call with a digest of the feature's prior entries; the re-sent package then carries `reuses`. The child then performs the work on `feature/<fid>`, and the three routing states / 5 invariants are visibly unchanged — no fourth state, no new routing line shape.
+
+**Verify.**
+
+```bash
+repo$ python3 scripts/multi-agent index show --feature-id <fid>
+# -> lists the prior task_ids the package's `reuses` names
+repo$ ls agents.json
+# -> no such file (the registry layer is removed)
+```
+
+Plus the transcript: the package is self-contained (objective + acceptance_criteria shaped per task, no registry preamble) and its first child-facing instruction is the handbook pointer.
+
+**Pass** — `reuses` present (or the digest denial + corrected re-send observed), handbook-first line present, no agents.json consulted, routing states/invariants untouched. **Fail** — a dispatch with index history and no `reuses` allowed through, an unknown `reuses` id allowed through, or any change to the three-state routing.
+
 ## Run log
 
 | Act | Result (PASS / FAIL / N/A) | Observed routing line | Notes (probe observations, timings) |
@@ -393,3 +428,4 @@ Notes on honest judging:
 | 7 | | | gate: impl-20260912-07 integrated? |
 | 8 | | | probe (b): |
 | 9 | | — | |
+| 10 | | | reuse loop: reuses field on same-feature dispatch? |

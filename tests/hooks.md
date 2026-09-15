@@ -36,6 +36,15 @@ re-sent with the fenced block. Calls whose `run_in_background` is not exactly
 `true` are also **DENIED** — dispatches must be background so the main
 session returns to the user immediately.
 
+v7 reuse loop (same block-and-re-send loop): when the package's `feature_id`
+already has entries in `.orch-lite/index.json` (project cwd), the package
+must carry a `reuses` field listing the index task_ids the main session has
+read. Omission denies ONCE with a digest of the prior entries (task ids,
+statuses, one-line summaries); an unknown id denies naming the valid ones. A
+feature with no index history passes without `reuses`; packages without a
+`feature_id` are unaffected. The hook is stateless, so every dispatch whose
+feature has index history carries `reuses` — the digest denial teaches it.
+
 Enforces N15 (amended): a dispatch must carry 4 required fields
 (`task_id` / `role` / `objective` / `acceptance_criteria`); the optional
 `feature_id` must match `^[a-z0-9][a-z0-9._-]*$` (it names the
@@ -56,6 +65,17 @@ ignored when present.
 | 1.10 | fenced JSON + valid `feature_id: "payment"` + background | exit 0, empty stdout | ✅ |
 | 1.11 | valid fenced JSON but `run_in_background` absent | exit 2, stderr: `Dispatches must run in the background (run_in_background=true) so the main session returns to the user immediately; re-send with run_in_background set to exactly true` | ✅ |
 | 1.12 | valid fenced JSON but `run_in_background: false` | exit 2 (foreground reason on stderr, as 1.11) | ✅ |
+| 1.13 | `feature_id` whose feature has index history, no `reuses` field | exit 2, stderr: digest of the feature's own entries (task id / status / summary) + instruction to re-send with `reuses` | ✅ |
+| 1.14 | `reuses` naming an unknown task_id | exit 2, stderr lists the valid index task_ids | ✅ |
+| 1.15 | prompt without the handbook-first instruction (no `skills/orch-lite-executor/SKILL.md` line) | exit 2, stderr names the handbook path | ✅ |
+| 1.16 | `reuses` of a wrong shape (empty list / non-list / non-string item) | exit 2, stderr asks for a non-empty list of index task_ids | ✅ |
+| 1.17 | `feature_id` with NO index history (index present, other features only) | exit 0 — no `reuses` required | ✅ |
+| 1.18 | `reuses` with valid index task_ids + handbook-first line | exit 0, empty stdout | ✅ |
+| 1.19 | package WITHOUT `feature_id` while the index is full of history | exit 0 (reuse loop unaffected) | ✅ |
+| 1.20 | v6 binding: package with `feature_id` whose branch `feature/<fid>` exists (sandbox repo) | exit 0, empty stdout | ✅ |
+| 1.21 | v6 binding: `feature_id` whose branch is absent | exit 2, stderr names both fixes: create branch `feature/<fid>` from mainline HEAD (new feature) or fix the `feature_id` | ✅ |
+| 1.22 | v6 binding: package without `feature_id` in a non-repo cwd | exit 0 (binding gate unaffected; git fail-open) | ✅ |
+| ROUTE | SKILL.md Step 0: routing line restated as a MUST; self-repair clause and the three `[routing]` states intact | assertions on the Request Routing section | ✅ |
 
 Hard enforcement (1.4, 1.7, 1.11–1.12) is the v3 design point: the fenced
 block is the only dispatch marker that actually reaches the hook, and its
@@ -124,8 +144,8 @@ line with exit 0 — the hook never crashes the session.
 
 | # | Setup | Expected | Actual |
 |---|---|---|---|
-| 3.1 | fresh project, no `multi-agent/` | creates the full tree (`index.json`, `memory/shared.json`; git bootstrapped when repo-less); all four memory sections present, index shows `Index is empty`, Health shows `doctor: all clear` | ✅ |
-| 3.2 | project with a populated index / existing `multi-agent/` | re-runs init idempotently (no overwrite), shows the flat task list, injects the Request Routing section, Health reflects doctor (e.g. stale/dirty findings) | ✅ |
+| 3.1 | fresh project, no `.orch-lite/` | creates the full tree (`index.json`, `memory.json`; git bootstrapped when repo-less); all four memory sections present, index shows `Index is empty`, Health shows `doctor: all clear` | ✅ |
+| 3.2 | project with a populated index / existing `.orch-lite/` | re-runs init idempotently (no overwrite), shows the flat task list, injects the Request Routing section, Health reflects doctor (e.g. stale/dirty findings) | ✅ |
 | 3.3 | SKILL.md without a "## Request Routing" section | graceful fallback line "(contract section missing in SKILL.md)" in additionalContext for that section, no crash (exit 0), init + index + Health still work | ✅ |
 | 3.4 | CLI copy predating the doctor subcommand | Health skipped silently (graceful-absence probe), the other sections intact, exit 0 | ✅ |
 | 3.5 | SKILL.md with all three contract sections (current shape) | additionalContext contains "--- 5 Invariants (memorize) (from SKILL.md) ---", "--- Request Routing (from SKILL.md) ---" and "--- Dispatch Package (MUST template) (from SKILL.md) ---", each section byte-identical to the SKILL.md text (verified programmatically: `extract_contract` output vs the slice between headings) | ✅ |
