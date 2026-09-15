@@ -263,6 +263,29 @@ The dispatch package itself (objective + acceptance criteria) is the complete de
 
 ---
 
+## Installation
+
+### ZCode
+
+Open **Settings → Plugins → Personal**, click **Create → Add marketplace**, enter `LYJ132/orch-lite` as the GitHub repo source, and click **Create**. Refresh the marketplace, then click **Install** on the Orch-lite plugin card.
+
+### Codex
+
+Add the marketplace and install from CLI:
+
+```bash
+codex plugin marketplace add LYJ132/orch-lite
+codex plugin add orch-lite
+```
+
+Or open Codex and run `/plugins` to browse and install. After installation, run `/hooks` to review and trust the bundled hooks.
+
+### Claude Code
+
+Claude Code adapter lives on the `feature/claude-code` branch of this repository.
+
+---
+
 ## Closing
 
 Orch-lite does not try to replace human work with agents. It changes the time structure of how humans and agents work together:
@@ -545,6 +568,29 @@ Orch-lite 不依赖平台预置的角色体系，而是通过两份 Skill 文档
 2. **结论复用（reuse loop）**：该特性在 index 中已有任务时，派发包必须携带 `reuses` 字段，列出主会话实际读过的历史 task_id。派发校验 hook 强制执行该约束：遗漏会被拒绝并返回历史摘要，填写未知 id 同样会被拒绝。子 Agent 据此在前序结论上继续，而非重新推导。
 
 派发包本身（目标 + 验收标准）即 Agent 的全部定义——没有注册表，没有预设角色，任务需要什么，Agent 就是什么。跨任务沉淀下来的经验与契约另存于 `.orch-lite/memory/shared.json`，供主会话与子 Agent 读取复用。
+
+---
+
+## 安装
+
+### ZCode
+
+打开 **设置 → 插件 → 个人**，点击 **Create → Add marketplace**，输入 GitHub 仓库 `LYJ132/orch-lite` 作为来源，点击 **Create**。刷新 marketplace 后，在 Orch-lite 插件卡片上点击 **Install**。
+
+### Codex
+
+从 CLI 添加 marketplace 并安装：
+
+```bash
+codex plugin marketplace add LYJ132/orch-lite
+codex plugin add orch-lite
+```
+
+或打开 Codex 运行 `/plugins` 浏览安装。安装后运行 `/hooks` 审核并信任内置的 hooks。
+
+### Claude Code 适配
+
+Claude Code 适配代码位于本仓库的 `feature/claude-code` 分支。
 
 ---
 
