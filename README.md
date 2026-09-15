@@ -4,7 +4,7 @@
 
 <a id="english"></a>
 
-# Orch-lite
+## English
 
 **Let agents work. Keep the human workflow moving.**
 
@@ -289,7 +289,7 @@ Let agents work. Keep the human workflow moving.
 
 <a id="中文"></a>
 
-# Orch-lite
+## 中文
 
 **让 Agent 去工作，让人的工作流继续。**
 
