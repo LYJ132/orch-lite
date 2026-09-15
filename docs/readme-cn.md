@@ -193,53 +193,47 @@ Multi-Agent 是实现手段，而非产品目标。
 
 ## 实现机制
 
-### 主会话：负责协调
+### 主会话与子 Agent：两份 Skill 定义的分工
 
-主 Agent 的职责是：
+Orch-lite 不依赖平台预置的角色体系，而是通过两份 Skill 文档划分职责：
 
-- 理解当前意图；
-- 判断请求属于交流还是实际工作；
-- 判断是否需要后台执行；
-- 分派任务；
-- 协调进行中的任务；
-- 在需要时请求人的决策；
-- 依据任务结果推进工作流。
+| Skill | 面向 | 职责 |
+|---|---|---|
+| orch-lite | 主会话 | 理解意图、对每个请求做路由判断、派发任务、协调状态、整合成果；只直接处理对话与只读操作，一切写操作都派发 |
+| orch-lite-executor | 子 Agent | 被派发者的执行手册：工作区边界、增量提交纪律、完成与失败的报告格式 |
 
-主会话不承担大量具体的文件修改与长时间执行。
+子 Agent 收到派发后的第一个动作是读取 executor 手册——派发包中的规则只是摘要，手册才是准绳。主会话不亲自执行，子 Agent 也不再派生新的 Agent。
 
-### 后台子 Agent：负责执行
+### 任务追踪：index.json
 
-具体任务由后台子 Agent 承担，包括修改代码与文件、重构、编写与运行测试、调试、生成文档等适合后台执行的工作。
+后台任务不依附于任何会话存在，其状态记录在项目根目录的 `.orch-lite/index.json`：
 
-```
-Main Agent
-   ├── Task A → Background Agent
-   ├── Task B → Background Agent
-   └── Task C → Background Agent
-```
-
-任务派发后，主会话立即回到与人的交流中。
-
-### 任务状态：后台工作独立于会话存在
-
-后台任务不能仅存在于单次对话上下文中。Orch-lite 以持久化状态记录任务：
-
-```
-Task
- ├── task_id
- ├── status
- ├── objective
- ├── acceptance criteria
- ├── agent
- ├── branch / worktree
- └── result
+```json
+{
+  "tasks": {
+    "impl-20260911-01": {
+      "role": "impl",
+      "feature_id": "login-api-fix",
+      "status": "assigned",
+      "objective": "Fix the 500 error of the login API",
+      "acceptance_criteria": ["login API returns 200"],
+      "output": null,
+      "products": [],
+      "agent_id": null,
+      "created_at": "2026-09-11T10:00:00+08:00",
+      "completed_at": null
+    }
+  }
+}
 ```
 
-主会话转去处理其他事项时，已派出的任务仍可被追踪。
+这是以 task_id 为唯一主键的扁平结构，记录角色、所属特性、状态、目标、验收标准、产物与实际执行该任务的 Agent。主会话独占写入：派发时创建条目，子 Agent 报告后更新结果。会话可以结束、Agent 可以更替，任务状态始终落盘、可查、可恢复。
 
-### Git / Worktree：隔离并行任务
+### 隔离与并行：feature 分支与 worktree
 
-多个后台任务同时修改代码时，需要明确的工作边界。Orch-lite 使用 Git branch / worktree 隔离并行工作：
+- 每个特性对应一条长生命周期分支 `feature/<feature_id>`，该特性的任务都在这条线上推进；
+- 隔离按需启用：只有一个任务时，子 Agent 直接在主工作树的 feature 分支上工作，零额外开销；已有任务在执行、新任务到来时，新任务获得独立的 git worktree（`.worktrees/<task_id>/`）；
+- 子 Agent 永不提交到 main，main 只接收主会话执行的整合合并；合并前进行冲突预检，存在冲突时停下，交由人决定。
 
 ```
           Repository
@@ -252,60 +246,14 @@ Task
  Agent A    Agent B    Agent C
 ```
 
-以此避免不同 Agent 相互污染工作区，并为后续整合提供基础。
+### 子 Agent 的复用
 
-### 派发即返回
+派发新任务前，主会话先查阅 index 中该特性的历史，通过两层复用避免重复劳动：
 
-任务一经派发，主会话尽快回到人手中：
+1. **会话复用（continuation）**：若已完成的同范围任务对应的 Agent 仍可恢复，优先向其发送续作包（新目标 + 增量上下文），而非新建 Agent；仅在需要并行槽位、或旧上下文已成为负担时才新派。
+2. **结论复用（reuse loop）**：该特性在 index 中已有任务时，派发包必须携带 `reuses` 字段，列出主会话实际读过的历史 task_id。派发校验 hook 强制执行该约束：遗漏会被拒绝并返回历史摘要，填写未知 id 同样会被拒绝。子 Agent 据此在前序结论上继续，而非重新推导。
 
-```
-传统：     用户 → Agent 执行 → 等待 → 执行完成 → 继续交流
-
-Orch-lite：用户 → Main Agent → 派发任务 → 立即返回 → 继续交流
-                              ↘ Background Agent → 执行 → 完成 / 等待决策
-```
-
-后台执行不占住主会话。
-
----
-
-## 任务路由
-
-请求被分为三类：
-
-- **chat**：纯交流、阅读、分析、解释，由主会话直接处理。
-
-```
-用户 → Main Agent → 直接处理
-```
-
-- **task**：存在一个明确、适合后台执行的工作，派发单个子 Agent。
-
-```
-用户 → Main Agent → Background Agent → 执行任务
-```
-
-- **orchestration**：已有后台任务在执行，或当前请求包含多个可独立执行的工作项。
-
-```
-              Main Agent
-             /    |    \
-        Task A  Task B  Task C
-         ↓       ↓       ↓
-      Agent A  Agent B  Agent C
-```
-
-orchestration 并非调度平台，而是保证多个后台任务在人的连续工作流中被安全管理。
-
-## 任务生命周期
-
-```
-NEW → DISPATCHED → RUNNING → COMPLETED → REVIEW / INTEGRATE
-                        │
-                        └─→ HELP_REQUEST → 人做决策 → RUNNING
-```
-
-具体状态与协议由 Orch-lite 的状态与协议文件定义。
+派发包本身（目标 + 验收标准）即 Agent 的全部定义——没有注册表，没有预设角色，任务需要什么，Agent 就是什么。跨任务沉淀下来的经验与契约另存于 `.orch-lite/memory/shared.json`，供主会话与子 Agent 读取复用。
 
 ---
 
