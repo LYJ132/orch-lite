@@ -12,6 +12,7 @@ Each entry in `agents[]` has:
 | `role` | string | yes | One of the orch-lite roles (impl/test/research/review/ops/...) |
 | `purpose` | string | yes | One-sentence standing objective; keep it general |
 | `standard_acceptance` | string[] | yes | Standing acceptance checks applied to every dispatch of this agent |
+| `features` | string[] | no | Optional pin: an owner MAY restrict this agent to specific `feature_id`s (the agent is only dispatched for those feature lines) |
 | `notes` | string | no | Provenance / caveats |
 
 Per-task specifics (task_id, the concrete objective for THIS dispatch, extra acceptance deltas, context pointers) are **never** stored here — they travel in the dispatch package as deltas.

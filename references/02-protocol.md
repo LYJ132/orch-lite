@@ -46,7 +46,7 @@ HANDOFF_PLAN from=main to=impl-20260911-01,test-20260911-02 artifact="After the 
 
 ## 4. Dispatch Package Format (main → child)
 
-**4 required fields + 1 optional**. No `instance_id`: `task_id` is the sole identity.
+**4 required fields + `feature_id` (MUST in every dispatch)**. No `instance_id`: `task_id` is the sole identity.
 
 ### 4.1 FORMAT MANDATE — fenced JSON block
 The dispatch prompt MUST embed the package as a fenced JSON block:
@@ -74,7 +74,7 @@ The dispatch prompt MUST embed the package as a fenced JSON block:
 | `role` | string | yes | functional role (test/research/impl/review/debug/docs/deploy/custom) |
 | `objective` | string | yes | specific, executable, verifiable |
 | `acceptance_criteria` | string[] | yes | confirmed before dispatch; the executor self-checks each |
-| `feature_id` | string | no | branch `feature/<feature_id>` & worktree; main-inferred, user-confirmed, reused |
+| `feature_id` | string | MUST | branch `feature/<feature_id>` & worktree; main-inferred, user-confirmed, reused. MUST in every dispatch: binds the package to one feature line's recorded state (branch + index + memory) so related work reuses it. The dispatch-validate hook checks the branch at dispatch time: absent → deny with two fixes — (i) NEW feature → include an explicit instruction for the child to create branch `feature/<feature_id>` from the current mainline HEAD; (ii) otherwise fix the `feature_id`. Generic (unbound) dispatches stay valid: omit `feature_id` + `registry: null` + `registry_reason`. Before composing, the main session SHOULD locate prior work via the index grouped by `feature_id` (`python3 scripts/multi-agent index list`) and reuse recorded conclusions. |
 
 ---
 
