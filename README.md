@@ -62,12 +62,15 @@ Orch-lite's response is not more agents, but **giving the human workflow and age
 
 The diagram compares the two interactions:
 
-- **Top (traditional):** the agent's Task A/B/C and the human's Read & Send blocks are serially staggered — the human waits while a task runs, and the agent starts the next task only after the human sends a message. Both sides wait on each other.
-- **Bottom (Orch-lite):** Task A/B/C form a continuous pipeline, with the human's Send and Read & Send blocks interleaved with task execution. The agent keeps advancing, and the human keeps working.
+**Top (traditional):** the agent's Task A/B/C and the human's Read & Send blocks are serially staggered — the human waits while a task runs, and the agent starts the next task only after the human sends a message. Both sides wait on each other.
+
+**Bottom (Orch-lite):** Task A/B/C form a continuous pipeline, with the human's Send and Read & Send blocks interleaved with task execution. The agent keeps advancing, and the human keeps working.
 
 The two timelines are no longer synchronized: the human's decision flow stays continuous while agent execution proceeds in parallel in the background.
 
-This separation brings two concrete forms of decoupling. **Context decoupling** keeps the main session clean: requirements, ideas, direction, questions, decisions, and review results stay in the conversation, while file edits, tool calls, tests, logs, debugging, and execution detail live with the background agent. Execution detail still exists and is tracked by the task system, but it no longer occupies the center of the conversation — yielding a cleaner main-session context, less redundant execution content, longer-lived sessions, and in suitable cases lower token consumption. Token savings are a consequence, not the goal.
+This separation brings two concrete forms of decoupling.
+
+**Context decoupling** keeps the main session clean: requirements, ideas, direction, questions, decisions, and review results stay in the conversation, while file edits, tool calls, tests, logs, debugging, and execution detail live with the background agent. Execution detail still exists and is tracked by the task system, but it no longer occupies the center of the conversation — yielding a cleaner main-session context, less redundant execution content, longer-lived sessions, and in suitable cases lower token consumption. Token savings are a consequence, not the goal.
 
 **Attention and cognitive decoupling** goes further. The main session becomes a space for thinking about goals, trade-offs, and next steps, rather than a place to stream what the agent just executed, what a command printed, or why a test failed. The latter is essential for execution, but it should not crowd out the conversation. When the main session stays focused on intent and direction, the agent can devote its attention to understanding real intent instead of burning context on execution detail.
 
@@ -109,6 +112,16 @@ Multi-agent is an implementation means, not a product goal.
 ---
 
 ## How It Works
+
+Four mechanisms make decoupling work in practice:
+
+1. **Two skills define the roles** — one skill for the main session (you), one for dispatched child executors. They handle everything from routing to workspace boundaries to commit discipline.
+2. **Task state lives on disk** — an `index.json` at the project root tracks every background task. Sessions die, agents change, state persists.
+3. **Lazy isolation via Git** — one task? work directly. Two tasks? a fresh worktree. Children never touch main; integration is the main session's job.
+4. **Reuse by default** — finished agents get continued rather than replaced; historical conclusions are read and carried forward, never re-derived.
+
+<details>
+<summary>Detailed implementation</summary>
 
 ### Main session and child agents: roles defined by two skills
 
@@ -171,6 +184,8 @@ Before dispatching a new task, the main session reads the feature's history in t
 2. **Conclusion reuse (reuse loop):** when the feature already has tasks in the index, the dispatch package must carry a `reuses` field listing the historical task_ids the main session actually read. The dispatch-validation hook enforces this: omission is denied with a digest of the history, and unknown ids are denied as well. The child builds on prior conclusions instead of re-deriving them.
 
 The dispatch package itself (objective + acceptance criteria) is the complete definition of an agent — there is no registry and no predefined roles; the agent is whatever the task requires. Experiences and contracts that survive across tasks are stored separately in `.orch-lite/memory/shared.json` for the main session and child agents to read and reuse.
+
+</details>
 
 ---
 
@@ -258,12 +273,15 @@ Orch-lite 的关键不在于增加 Agent 的数量，而在于**让人的工作�
 
 图中对比了两种交互：
 
-- **上半部分（传统模式）**：Agent 的 Task A/B/C 与人的 Read & Send（阅读并发送）串行错开——任务执行时人等待，人发出消息后 Agent 才开始下一项工作，双方相互等待。
-- **下半部分（Orch-lite）**：Task A/B/C 紧密衔接为连续流水线，人的 Send 与 Read & Send 穿插于任务执行期间。Agent 持续推进，人也持续工作。
+**上半部分（传统模式）**：Agent 的 Task A/B/C 与人的 Read & Send（阅读并发送）串行错开——任务执行时人等待，人发出消息后 Agent 才开始下一项工作，双方相互等待。
+
+**下半部分（Orch-lite）**：Task A/B/C 紧密衔接为连续流水线，人的 Send 与 Read & Send 穿插于任务执行期间。Agent 持续推进，人也持续工作。
 
 两条时间线不再同步：人的决策流程保持连续，Agent 的执行在后台并行推进。
 
-这种分离带来两个具体的解耦层次。**上下文解耦**让主会话保持整洁：用户需求、想法、方向、问题、决策与审核结果留在对话中，文件修改、工具调用、测试、日志、调试与执行细节则由后台 Agent 承载。执行细节依然存在、可被任务系统追踪，却不再占据交流的主要空间——主会话上下文更干净、冗余执行内容更少、长会话更易维持，并在适当场景下降低 Token 消耗。Token 节省是上下文解耦的结果，而非设计目标。
+这种分离带来两个具体的解耦层次。
+
+**上下文解耦**让主会话保持整洁：用户需求、想法、方向、问题、决策与审核结果留在对话中，文件修改、工具调用、测试、日志、调试与执行细节则由后台 Agent 承载。执行细节依然存在、可被任务系统追踪，却不再占据交流的主要空间——主会话上下文更干净、冗余执行内容更少、长会话更易维持，并在适当场景下降低 Token 消耗。Token 节省是上下文解耦的结果，而非设计目标。
 
 **注意力与认知解耦**更进一步。主会话应是讨论目标、取舍与下一步的空间，而不是实时播报 Agent 刚执行了什么、某条命令输出了什么、某个测试为何失败。后者对执行至关重要，却不应持续占据交流的中心。当主会话聚焦于意图与方向时，Agent 也能将更多注意力用于理解真实意图，而非在执行细节中消耗上下文。
 
@@ -305,6 +323,16 @@ Multi-Agent 是实现手段，而非产品目标。
 ---
 
 ## 实现机制
+
+四个机制让解耦在实际中落地：
+
+1. **两份 Skill 定义角色** — 主会话一份、子 Agent 一份，从路由判断到工作区边界再到提交纪律，全部有明确分工。
+2. **任务状态落盘** — 项目根目录的 `index.json` 记录每一个后台任务。会话可以终止，Agent 可以更替，状态始终在。
+3. **按需隔离** — 只有一个任务？直接在主工作树执行。再来一个？给它开独立 worktree。子 Agent 永不碰 main，整合归主会话。
+4. **默认复用** — 已完成的 Agent 优先续作而非重建；历史结论必须读过并带上，不许重新推导。
+
+<details>
+<summary>实现机制详解</summary>
 
 ### 主会话与子 Agent：两份 Skill 定义的分工
 
@@ -367,6 +395,8 @@ Orch-lite 不依赖平台预置的角色体系，而是通过两份 Skill 文档
 2. **结论复用（reuse loop）**：该特性在 index 中已有任务时，派发包必须携带 `reuses` 字段，列出主会话实际读过的历史 task_id。派发校验 hook 强制执行该约束：遗漏会被拒绝并返回历史摘要，填写未知 id 同样会被拒绝。子 Agent 据此在前序结论上继续，而非重新推导。
 
 派发包本身（目标 + 验收标准）即 Agent 的全部定义——没有注册表，没有预设角色，任务需要什么，Agent 就是什么。跨任务沉淀下来的经验与契约另存于 `.orch-lite/memory/shared.json`，供主会话与子 Agent 读取复用。
+
+</details>
 
 ---
 
