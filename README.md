@@ -8,7 +8,7 @@
 
 **Let agents work. Keep the human workflow moving.**
 
-Orch-lite is a lightweight background-execution skill for coding agents.
+Orch-lite is a lightweight background-execution skill for Coding Agents.
 
 Its core is a single idea: **decouple agent execution from human conversation and decision-making.**
 
@@ -20,7 +20,7 @@ The agent keeps working, and the human workflow is never interrupted.
 
 ## The Problem: Two-Way Blocking in a Serial Interaction
 
-A traditional coding agent interaction is a serial process:
+A traditional Coding Agent interaction is a serial process:
 
 ```
 Human makes a request
