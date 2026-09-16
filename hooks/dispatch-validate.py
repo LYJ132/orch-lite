@@ -242,13 +242,38 @@ def feature_branch_exists(feature_id: str) -> Tuple[Optional[bool], Optional[str
     return False, None
 
 
-def evaluate_feature_binding(feature_id) -> Tuple[bool, str]:
-    """Gate a package's feature_id against the repository's branch state."""
+# Branch-creation instruction: the literal command form the deny message
+# promises — 'git checkout -b' followed by 'feature/<feature_id>' somewhere
+# in the prompt (any whitespace between; the -b flag may carry its own
+# spacing). Scoped to the exact feature_id so an instruction naming a
+# DIFFERENT feature's branch does not unlock this dispatch.
+CREATE_BRANCH_RE_TMPL = r"git\s+checkout\s+-b\s+(?:-\w+\s+)*feature/%s(?:\s|['\"`/]|$)"
+
+
+def prompt_carries_create_branch(prompt, feature_id: str) -> bool:
+    """True when the prompt contains an explicit branch-creation instruction
+    for this exact feature_id ('git checkout -b feature/<fid>')."""
+    if not prompt:
+        return False
+    pat = re.compile(CREATE_BRANCH_RE_TMPL % re.escape(str(feature_id)))
+    return bool(pat.search(prompt))
+
+
+def evaluate_feature_binding(feature_id, prompt="") -> Tuple[bool, str]:
+    """Gate a package's feature_id against the repository's branch state.
+
+    Branch exists -> pass. Branch absent -> pass only when the prompt
+    carries an explicit create-branch instruction for THIS feature_id
+    (new-feature dispatches); otherwise deny with the two-fix message.
+    feature_id None -> pass; git unusable -> fail-open pass.
+    """
     if feature_id is None:
         return True, ""  # generic (unbound) dispatch: unaffected
     exists, diag = feature_branch_exists(str(feature_id))
     if exists is True or exists is None:
         return True, ""  # bound, or git unusable -> fail-open
+    if prompt_carries_create_branch(prompt, str(feature_id)):
+        return True, ""  # new feature: the package declares branch creation
     return False, BRANCH_MISSING_TMPL % (feature_id, feature_id, feature_id)
 
 
@@ -302,7 +327,7 @@ def evaluate(prompt, run_in_background):
 
     # v6 binding: a feature_id must point at an existing feature branch, or
     # the package must carry the create-branch instruction (new feature).
-    allowed, reason = evaluate_feature_binding(feature_id)
+    allowed, reason = evaluate_feature_binding(feature_id, prompt)
     if not allowed:
         return False, reason
 

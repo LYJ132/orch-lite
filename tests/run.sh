@@ -376,6 +376,30 @@ case_1_22() {
   expect_pass
 }
 
+case_1_23() {
+  # v6 binding: branch absent + prompt carries the create-branch instruction
+  # for THIS feature_id -> pass (new-feature dispatch is no longer a deadlock)
+  local d pkg prompt
+  d="$(fresh_git_repo feature/other-line)" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "fresh-line"}'
+  prompt="context line: create branch with \`git checkout -b feature/fresh-line\` from mainline HEAD.
+$(fenced_prompt "$pkg")"
+  dv_run_in "$d" "$(agent_event Agent "$prompt" true)"
+  expect_pass
+}
+
+case_1_24() {
+  # v6 binding: branch absent + instruction names a DIFFERENT feature_id
+  # -> still deny with the two-fix message (exact-id scoping)
+  local d pkg prompt
+  d="$(fresh_git_repo feature/other-line)" || return 1
+  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "missing-line"}'
+  prompt="context: run \`git checkout -b feature/some-other-line\` before writing.
+$(fenced_prompt "$pkg")"
+  dv_run_in "$d" "$(agent_event Agent "$prompt" true)"
+  expect_deny "Branch feature/missing-line does not exist"
+}
+
 case_route_must() {
   # B: Step 0 routing line is a hard MUST; self-repair clause and the three
   # routing states stay in the Request Routing section.
@@ -892,6 +916,8 @@ run_case "1.19   no feature_id -> reuse loop unaffected"      case_1_19
 run_case "1.20   v6 binding: branch exists -> pass"       case_1_20
 run_case "1.21   v6 binding: branch absent -> deny, both fixes" case_1_21
 run_case "1.22   v6 binding: no feature_id unaffected"    case_1_22
+run_case "1.23   v6 binding: branch absent + create-branch instruction -> pass" case_1_23
+run_case "1.24   v6 binding: instruction for a DIFFERENT id -> deny" case_1_24
 run_case "ROUTE  Step 0 routing line is a MUST (B)"       case_route_must
 run_case "audit  dispatch-validate broken shapes"         case_1_audit_shapes
 run_case "3.1    fresh project bootstrap (temp copy)"     case_3_1
