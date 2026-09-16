@@ -15,7 +15,7 @@
 Resource occupancy is enforced without messages: worktree isolation + the CLI-internal memory flock — no boundary claim/release mechanism exists.
 
 ### 2.1 Integration conflict (main → user)
-Concurrent same-file edits are prevented by construction, so there is no child-to-child SCOPE_VIOLATION anymore. The only conflict surface is integration: `worktree merge --feature-id` pre-check reports conflicting files and asks the user (abort by default, or `--no-commit` for manual resolution).
+Concurrent same-file edits are prevented by construction, so there is no child-to-child SCOPE_VIOLATION anymore. The only conflict surface is integration: `worktree merge --feature-id` pre-check reports conflicting files and asks the user (abort by default, or `--no-commit` for manual resolution). Integration merges are the main agent's own direct action (bookkeeping carve-out) — no integrator dispatch is involved; only pushing to remotes is dispatched or user-driven.
 
 ```
 CONFLICT from=main feature_id=login-api-fix files=["src/auth/login.py"] stage=pre-merge decision_needed=user
@@ -41,6 +41,8 @@ HANDOFF_PLAN from=main to=impl-20260911-01,test-20260911-02 artifact="After the 
 | Main→worktrees | CLI | `worktree create` (T1) / `worktree remove` (T2) / `worktree merge --feature-id` (integration) |
 
 **Forbidden**: child→child task dispatch (must go through main); child committing to main.
+
+**Main-session direct actions beyond reads (bookkeeping carve-out)**: the main session directly runs `git checkout -b feature/<id>`, local integration merges (`git merge --ff-only` / `--no-edit`), `tests/run.sh`, and the `.orch-lite` CLI bookkeeping (`index`/`memory` updates) — bookkeeping that creates no new content. Integrator dispatches are retired for local integration: `worktree merge --feature-id` (or the plain git merge it drives) is the main agent's own step, not a dispatched child; pushing remains a dispatched/user action. Every file/content edit and every content commit stays dispatched.
 
 ---
 

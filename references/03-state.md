@@ -64,7 +64,7 @@ A child's `STUCK` report (executor handbook report state, alongside `TASK_COMPLE
 | Branch | `feature/<feature_id>` — one long-lived branch per feature; merge = periodic integration, not closure; never auto-deleted (only the user removes it manually if truly abandoned) |
 | feature_id | main-inferred, user-confirmed, reused across the feature's tasks; every dispatch carries it (MUST) so work binds to this feature line's recorded state — the dispatch-validate hook checks branch `feature/<feature_id>` exists at dispatch time (absent → deny with the create-branch or fix-id fix) |
 | Commit authorship | child sets `GIT_AUTHOR_NAME=<task_id>` (+ local email) so history distinguishes tasks (the old `instance_id` author is retired) |
-| Main-tree protection | primary tree = main only (integration merges); children never commit to main |
+| Main-tree protection | primary tree = main only (integration merges); children never commit to main. The integration merges themselves are the main agent's direct bookkeeping carve-out — `git checkout -b feature/<id>`, `git merge --ff-only`/`--no-edit`, `tests/run.sh`, and `.orch-lite` CLI index/memory updates are the main session's own steps, not dispatched work (nothing new is authored); content edits and content commits stay dispatched |
 | Invariant | at most ONE writable worktree per feature branch (git-enforced; a second create fails with `feature busy`) |
 
 **Two create openings**: ① first task of a feature — `feature/<fid>` does not exist yet, created from `--base` (default `main`); ② later task of the same feature — branch exists, new worktree attaches, continuing the feature. Same-feature concurrency beyond that follows the lazy concurrency gate (01-judgment §1.11).
