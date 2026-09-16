@@ -34,7 +34,7 @@ HANDOFF_PLAN from=main to=impl-20260911-01,test-20260911-02 artifact="After the 
 |---|---|---|
 | User→main | direct | natural language |
 | Main→child | direct | dispatch package |
-| Child→main (report/help) | direct | structured text |
+| Child→main (report/help) | direct | structured text; report states: `TASK_COMPLETED` / **`STUCK`** (stuck 3 failed attempts or ~10 min without progress, memory read first, still unsolved — carries problem, attempts made, what memory said) / structured failure |
 | Child→child (product handoff) | index doc | A writes, B polls & reads |
 | Child→child (info query) | point-to-point | read-only only |
 | Child→its write area | git | work only in the workspace named for you (no other task running → the working tree on your `feature/<feature_id>` branch, created before the first write; a task running → `.worktrees/<task_id>/`); commit as `<task_id>`, never on main |

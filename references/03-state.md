@@ -51,6 +51,8 @@ project root/                        ← primary working tree: main agent only (
 | T1 assign | `index create --task-id --role [--feature-id] [--objective] [--criteria ...] [--agent-id <agent>]` | flat entry, status=assigned; `agent_id` = plain metadata (the platform agent/session that runs the task; enables the continuation/reuse check) |
 | T2 status update | `index update --task-id [--status --output --products] [--agent-id <agent>]` | status/output/products (+ optional agent_id metadata); completed/failed auto-records completed_at |
 
+A child's `STUCK` report (executor handbook report state, alongside `TASK_COMPLETED`/structured failure) does NOT close the task: the index entry stays `assigned` until the main session re-dispatches with the recorded conclusions folded into a new objective (main skill, Memory section); a structured failure is recorded as `failed`.
+
 ---
 
 ## 3. Worktree Model
