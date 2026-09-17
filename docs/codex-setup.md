@@ -7,7 +7,7 @@ This guide covers two Codex-specific steps beyond the basic plugin install:
 
 All paths below use `~/.codex/` (on Windows: `%USERPROFILE%\.codex\`). Config changes only take effect after restarting Codex Desktop or opening a new CLI session — hook snapshots are loaded at session start.
 
-Verified on: Codex Desktop 26.908.9136.0 (MSIX) with codex CLI 0.154.0-alpha.6.2. Exact behavior may differ on other builds.
+Verified on a recent Codex Desktop (MSIX) / codex CLI build. Exact behavior may differ on other builds.
 
 ---
 

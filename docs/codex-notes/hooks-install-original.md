@@ -1,5 +1,7 @@
 # Codex Desktop 手动安装 orch-lite 钩子
 
+> Sanitized copy; personal paths and environment fingerprints generalized.
+
 ## 结论
 
 orch-lite 插件的钩子本体不需要复制到哪里去，Codex 会从插件包的 `hooks/hooks.json` 自动发现。真正需要手动处理的，是把这两个钩子标记为「trusted」，否则 Codex 会把它们识别为 `untrusted`，然后拒绝执行。
@@ -25,10 +27,10 @@ trusted_hash = "sha256:633ce887845a96bf39783d20c0a6dc8ba4e99b25bec8d2352f081d327
 
 ## 插件位置
 
-本机插件缓存路径是：
+本机插件缓存路径是（Windows 上为 `%USERPROFILE%\.codex\plugins\cache\orch-lite\orch-lite\<ver>`，其他平台为 `~/.codex/plugins/cache/...`）：
 
 ```text
-C:\Users\LIN YU JIAN\.codex\plugins\cache\orch-lite\orch-lite\1.1.2
+~/.codex/plugins/cache/orch-lite/orch-lite/<ver>
 ```
 
 插件内部相关文件：
@@ -41,16 +43,16 @@ hooks\dispatch-validate.py
 
 ## 安装方式
 
-我生成过一个幂等脚本，位置：
+一个幂等安装脚本可以放在任意用户目录下，例如：
 
 ```text
-C:\Users\LIN YU JIAN\Documents\Codex\2026-09-16\orch-lite-orch-lite-c-users\outputs\materialize-orch-lite-hooks.ps1
+<user documents>\Codex\<date>\outputs\materialize-orch-lite-hooks.ps1
 ```
 
 在 PowerShell 里运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\LIN YU JIAN\Documents\Codex\2026-09-16\orch-lite-orch-lite-c-users\outputs\materialize-orch-lite-hooks.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "<user documents>\Codex\<date>\outputs\materialize-orch-lite-hooks.ps1"
 ```
 
 这个脚本会：

@@ -8,9 +8,9 @@
 
 > 读者：负责本特性后续开发的智能体。
 > 目标：在 orch-lite 插件中实现 `SubagentStart` hook（注册 + 脚本 + 策略文件 + 测试），完成本地实测后回填 orch-lite 仓库。
-> 本文所有结论均基于对本机 Codex 安装的实际逆向与日志取证，证据路径全部给出，可复核。
+> 本文所有结论均基于对本机 Codex 安装的实际逆向与日志取证；原文中的证据路径已做脱敏泛化（见文末证据索引说明），如需复核请在本地重新取证。
 > 撰写日期：2026-09-17。
-> **修订版本：rev2（2026-09-17）**——本版应用了六项经所有者确认的修订（复用环约束语义更正、注入通道降级开关、策略默认值保守化、脚本健壮性加固、单向断链事实、schema 版本号）；**所有原始证据路径保持不变**。
+> **修订版本：rev2（2026-09-17）**——本版应用了六项经所有者确认的修订（复用环约束语义更正、注入通道降级开关、策略默认值保守化、脚本健壮性加固、单向断链事实、schema 版本号）；**原始证据路径已泛化脱敏**。
 
 ---
 
@@ -30,20 +30,20 @@
 
 | 项 | 值 |
 |---|---|
-| Codex Desktop | 26.908.9136.0（商店版 MSIX，`C:\Program Files\WindowsApps\OpenAI.Codex_...\app\`） |
-| codex 内核 | 0.154.0-alpha.6.2（`C:\Users\LIN YU JIAN\AppData\Local\OpenAI\Codex\bin\12219cbfbcbddde7\codex.exe`） |
-| multi-agent v2 | 已启用：`[features] multi_agent_v2 = true`；模型目录 `relay-mu45469g.json` 中 glm-5.3-flash 带 `"multi_agent_version": "v2"` |
+| Codex Desktop | `<Codex Desktop version>`（商店版 MSIX，安装于系统 MSIX 应用目录下的 `app\`） |
+| codex 内核 | `<codex CLI version>`（`%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`） |
+| multi-agent v2 | 已启用：`[features] multi_agent_v2 = true`；模型目录 `<model-catalog>` 中 `<model>` 带 `"multi_agent_version": "v2"` |
 | 实测 | spawn → 独立执行 → FINAL_ANSWER 回传，链路完整跑通 |
-| 模型链路 | glm-5.3-flash 经 codex-plus-plus 本地中转（`http://127.0.0.1:57321/v1`，wire_api=responses） |
+| 模型链路 | `<model>` 经 codex-plus-plus 本地中转（`<local-endpoint>`，wire_api=responses） |
 
 ### 1.2 关键发现 A：PreToolUse 对子代理派发从不触发（平台缺口）
 
 四个独立证据：
 
-1. **rollout 无痕**：父线程 rollout（`sessions\2026\09\17\rollout-2026-09-17T00-09-22-01a0aad1-..._01a0aafa-....jsonl`）的 event_msg 类型只有 `item_completed / task_complete / task_started / thread_settings_applied / token_count`，没有任何 hook 运行事件。
+1. **rollout 无痕**：父线程 rollout（`~/.codex/sessions/<date>/<parent-rollout>.jsonl`）的 event_msg 类型只有 `item_completed / task_complete / task_started / thread_settings_applied / token_count`，没有任何 hook 运行事件。
 2. **日志库零记录**：`~/.codex/logs_2.sqlite` 的 logs 表约 14.9 万行，`LIKE '%hook%'` 命中 0 行。
 3. **行为反证**：orch-lite 已注册 PreToolUse（matcher `spawn_agent|Agent|Task`，dispatch-validate.py 会在无 fenced JSON 时 exit 2 拒绝；本机 python 3.11 可用）。实测一次**不带任何 fenced JSON** 的 `spawn_agent` 调用成功放行——若 hook 触发必然被拒。
-4. **hook_outputs 时间线**：`D:\TEMP\TMP\hook_outputs\<thread-id>\` 下只有 SessionStart 的输出文件（本线程 0:03:43 / 0:06:42 / 0:09:30 / 0:49:22 四份），spawn 时刻（0:10:01）无任何产出。
+4. **hook_outputs 时间线**：本地 hook 输出临时目录（`<local-temp>\hook_outputs\<thread-id>\`）下只有 SessionStart 的输出文件（本线程 0:03:43 / 0:06:42 / 0:09:30 / 0:49:22 四份），spawn 时刻（0:10:01）无任何产出。
 
 内核侧佐证：collab 工具（`spawn_agent / send_input / resume_agent / wait_agent / close_agent / send_message / followup_task / interrupt_agent / list_agents`）走独立的 `codex_collab_agent_tool_call_event` 事件通道，不在普通工具 hook 管线内。
 
@@ -51,7 +51,7 @@
 
 ### 1.3 关键发现 B：子代理收不到消息 payload（投递缺陷）
 
-实测投递结构（子线程 rollout `rollout-2026-09-17T00-10-01-01a0aafb-742c-7ba1-8fca-73624a36f8dd.jsonl`）：
+实测投递结构（子线程 rollout `~/.codex/sessions/<date>/<child-rollout>.jsonl`）：
 
 ```json
 "content": [
@@ -325,19 +325,21 @@ if __name__ == "__main__":
 
 - 上游给 `SubagentStart` 输入加 prompt/消息字段，或让 collab 工具接入 PreToolUse → 届时把 dispatch-validate 的包校验逻辑移植到新事件，内容门禁在 Codex 复活。
 - 中转层修复（codex-plus-plus `user_scripts` 或外挂改写代理：`{"type":"encrypted_content","encrypted_content":X}` → `{"type":"input_text","text":X}`）→ 子代理能读到 payload，验收标准与手册指令随包到达。**这是"验收标准到达子代理"的前置条件，与 hook 无关但必须列入依赖。**
-- 上游正修方向（值得报给 OpenAI）：非官方 provider 下 inter-agent payload 应直接投成 input_text；0.154.0-alpha.6.2 仍为 alpha。
+- 上游正修方向（值得报给 OpenAI）：非官方 provider 下 inter-agent payload 应直接投成 input_text；当时的 `<codex CLI version>` 仍为 alpha。
 
 ---
 
 ## 附：关键证据文件索引
 
+Evidence paths generalized from the original investigation; re-derive locally if needed.
+
 | 证据 | 路径 |
 |---|---|
-| 父线程 rollout（spawn 调用记录） | `C:\Users\LIN YU JIAN\.codex\sessions\2026\09\17\rollout-2026-09-17T00-09-22-01a0aad1-5b8f-7f41-a37b-ce1097f2ee15_01a0aafa-deac-7622-b75f-78b040d4bec7.jsonl` |
-| 子线程 rollout（投递缺陷现场） | `C:\Users\LIN YU JIAN\.codex\sessions\2026\09\17\rollout-2026-09-17T00-10-01-01a0aafb-742c-7ba1-8fca-73624a36f8dd.jsonl` |
-| codex 内核二进制（schema/事件取证） | `C:\Users\LIN YU JIAN\AppData\Local\OpenAI\Codex\bin\12219cbfbcbddde7\codex.exe` |
-| hook 输出临时目录（SessionStart 证据） | `D:\TEMP\TMP\hook_outputs\01a0aad1-5b8f-7f41-a37b-ce1097f2ee15\` |
-| 日志库（0 条 hook 记录） | `C:\Users\LIN YU JIAN\.codex\logs_2.sqlite`（logs 表） |
-| ZCode hook 官方文档 | `C:\Users\LIN YU JIAN\.zcode\cli\plugins\cache\zcode-plugins-official\zcode-guide\0.1.0\skills\diagnosing-hooks\SKILL.md` |
-| orch-lite 插件 hooks | `C:\Users\LIN YU JIAN\.codex\plugins\cache\orch-lite\orch-lite\1.1.2\hooks\`（hooks.json / dispatch-validate.py / session-init.py） |
-| 已交付的开启指南（前置上下文） | `C:\Users\LIN YU JIAN\Desktop\Codex-multi-agent-v2-开启指南.md` |
+| 父线程 rollout（spawn 调用记录） | `~/.codex/sessions/<date>/<parent-rollout>.jsonl` |
+| 子线程 rollout（投递缺陷现场） | `~/.codex/sessions/<date>/<child-rollout>.jsonl` |
+| codex 内核二进制（schema/事件取证） | `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` |
+| hook 输出临时目录（SessionStart 证据） | `<local-temp>\hook_outputs\<thread-id>\` |
+| 日志库（0 条 hook 记录） | `~/.codex/logs_2.sqlite`（logs 表） |
+| ZCode hook 官方文档 | `<zcode plugin cache>\zcode-guide\<ver>\skills\diagnosing-hooks\SKILL.md` |
+| orch-lite 插件 hooks | `~/.codex/plugins/cache/orch-lite/orch-lite/<ver>/hooks/`（hooks.json / dispatch-validate.py / session-init.py） |
+| 已交付的开启指南（前置上下文） | `<user Desktop>\<multi-agent v2 开启指南>.md` |
