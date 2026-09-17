@@ -77,32 +77,24 @@ Choosing between `task` and `orchestration` requires two checks — a state chec
 
 Every dispatch prompt has exactly four parts, in order:
 
-1. **Identity line**: `<task_id> (role: <role>). You are a dispatched child executor.`
-2. **Six-rule MUST block** (copy verbatim, filling task specifics into rule 2):
-   > Binding rules — MUST:
-   > 1. You MUST do all work with your own tools; you MUST NOT dispatch or derive further agents.
-   > 2. You MUST work only in the workspace named for you — per concurrency state (no other task running → the working tree on a `feature/<feature_id>` branch you create first; a task already running → `.worktrees/<task_id>/`) — MUST NOT commit on main (`main` only receives integration merges by the main agent), and MUST NOT write outside it.
-   > 3. You MUST commit incrementally, authored as `<task_id>`, and always before reporting.
-   > 4. You MUST check `.orch-lite/memory.json` and the index before re-deriving anything non-obvious.
-   > 5. You MUST follow every entry in memory `contracts[]`.
-   > 6. You MUST report `TASK_COMPLETED` + summary + commit hash on success, and a structured failure report otherwise; you MUST NOT go silent.
-3. **Fenced-JSON package** (N15: 4 required fields + `feature_id`):
+1. **Identity line**: `<task_id> (role: <role>, optional — defaults to "impl"). You are a dispatched child executor.`
+2. **Handbook-first instruction — the first instruction in the prompt**: `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the handbook is canonical for behavior`. The handbook carries the child's binding rules; do not restate them in the package.
+3. **Fenced-JSON package** (required: `task_id`, `objective`, `acceptance_criteria`):
    ```json
-   {"task_id": "impl-20260911-01", "role": "impl", "objective": "Fix the 500 error of the login API", "acceptance_criteria": ["login API returns 200"], "feature_id": "login-api-fix"}
+   {"task_id": "impl-20260911-01", "objective": "Fix the 500 error of the login API", "acceptance_criteria": ["login API returns 200"]}
    ```
-   **`feature_id` is a MUST in every dispatch** — it binds the dispatch to one feature line's recorded state (branch `feature/<feature_id>` + index + memory), so related work reuses that line instead of fragmenting. The dispatch-validate hook enforces the binding: if the branch does not exist at dispatch time, the call is denied with exactly two fixes — (i) NEW feature → include in the package an explicit instruction for the child to create branch `feature/<feature_id>` from the current mainline HEAD, or (ii) fix the `feature_id`. Generic (unbound) dispatches stay supported: omit `feature_id` (packages without one are unaffected by the binding gate).
-   **Reuse loop (hook-enforced)**: when `.orch-lite/index.json` already has entries for the package's `feature_id`, the package MUST carry a `"reuses"` field — a list of the index task_ids the main session has read before composing (e.g. `"reuses": ["impl-20260914-01"]`). The hook validates every id (an unknown id → deny naming the valid ones); a feature with no index history needs no `reuses`. The hook is stateless, so the rule is uniform: every dispatch whose feature has index history carries `reuses` — the first one is denied exactly once with a digest of the prior entries (task ids, statuses, one-line summaries), which teaches the requirement.
+   **`feature_id` is optional binding metadata** (plain naming, no format gate). Binding is a convention, not enforcement: one feature = one branch — the child works on `feature/<feature_id>` and the gate no longer checks branch existence, the index, or any `reuses` field. Generic dispatches simply omit it.
+   **Reuses are a composition convention, not hook-enforced**: when the feature has index history, read it first and note in the package which entries shaped the objective.
    **The package IS the agent's definition.** There are no role pre-definitions and no agents.json registry: the dispatch's `objective` + `acceptance_criteria`, shaped per task, are the whole definition of the agent that runs it. Read the feature's index entries first and let their recorded conclusions shape the objective instead of re-deriving them.
 4. **Context pointers — at most 3 lines**, and only file-unreachable facts (decisions, constraints, paths that exist nowhere on disk). Secrets are read-never-print: never inline a secret in a dispatch. Never re-paste process text — the child pulls everything file-reachable from SKILL.md / references / memory / git log.
 
 <EXTREMELY-IMPORTANT>
 **Reuse-first composition (MUST):**
 - **Before composing any dispatch, read the feature's index history** (`python3 scripts/multi-agent index show --feature-id <fid>`, plus the feature-branch history when it exists). There is no agents.json and no registry: the package's `objective` + `acceptance_criteria` ARE the agent's definition — shape them per task, folding in what prior entries teach so the child reuses conclusions instead of re-deriving them.
-- **When the index has prior entries for the feature, the package MUST carry `reuses`** listing the index task_ids you have actually read; the dispatch-validate hook denies a dispatch that omits them (with a digest of the entries) and denies unknown ids. A feature with no index history passes without `reuses`.
-- **Every dispatch package's first instruction to the child is:** `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`.
+- **Every dispatch package's first instruction to the child is:** `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the handbook is canonical`.
 </EXTREMELY-IMPORTANT>
 
-The reuse loop refines dispatch **composition** only — routing is untouched: the three states and the 5 invariants above stay exactly as written.
+The gate is minimal by design: it checks only the package's shape (fenced JSON, required fields, background flag, handbook pointer). Binding and reuse are conventions the main agent follows when composing, not hook checks — routing is untouched: the three states and the 5 invariants above stay exactly as written.
 
 ---
 
