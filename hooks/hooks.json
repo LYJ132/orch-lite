@@ -12,6 +12,18 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-start.py\"",
+            "commandWindows": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-start.py\"",
+            "async": false
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "spawn_agent|Agent|Task",
