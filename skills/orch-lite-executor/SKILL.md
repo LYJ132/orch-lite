@@ -24,7 +24,7 @@ You are a dispatched child executor. Your parent (the main agent) received this 
 
 ## Standard Flow After Receiving a Dispatch
 
-> **Dispatch prompt shape you received (MUST template)**: 1 identity line (`<task_id> (role: <role>). You are a dispatched child executor.`) + the six-rule MUST block above + the fenced-JSON package (`task_id`, `role`, `objective`, `acceptance_criteria` required; optional `feature_id`) + at most 3 context-pointer lines (file-unreachable facts only; secrets are read-never-print).
+> **Dispatch prompt shape you received (MUST template)**: 1 identity line (`<task_id> (role: <role>, optional — defaults to "impl"). You are a dispatched child executor.`) + the handbook-first line (read this SKILL.md) + the fenced-JSON package (`task_id`, `objective`, `acceptance_criteria` required; optional plain metadata: `role`, `feature_id`, `reuses`) + at most 3 context-pointer lines (file-unreachable facts only; secrets are read-never-print). The dispatch-validate gate checks only this package's shape (fenced JSON, required fields, background flag, handbook pointer) — it does not check branch existence or the index; the binding and reuse conventions above still bind you.
 
 > **Worktree is optional (lazy isolation)**: the dispatch JSON carries a `worktree` context line ONLY when the main agent found concurrency at dispatch; without it, write in the working tree — on your `feature/<feature_id>` branch, created and checked out before the first write, never on `main`.
 

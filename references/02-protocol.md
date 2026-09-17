@@ -48,22 +48,22 @@ HANDOFF_PLAN from=main to=impl-20260911-01,test-20260911-02 artifact="After the 
 
 ## 4. Dispatch Package Format (main → child)
 
-**4 required fields + `feature_id` (MUST in every dispatch)**. No `instance_id`: `task_id` is the sole identity.
+**Required fields: `task_id` / `objective` / `acceptance_criteria`** (`role` optional, defaults to "impl"; `feature_id` optional plain metadata). No `instance_id`: `task_id` is the sole identity.
 
 ### 4.1 FORMAT MANDATE — fenced JSON block
 The dispatch prompt MUST embed the package as a fenced JSON block:
 
 ```json
-{"task_id": "impl-20260911-01", "role": "impl", "objective": "Fix the 500 error of the login API", "acceptance_criteria": ["login API returns 200"], "feature_id": "login-api-fix"}
+{"task_id": "impl-20260911-01", "objective": "Fix the 500 error of the login API", "acceptance_criteria": ["login API returns 200"]}
 ```
 
-**Rationale**: machine-parseable, so a PreToolUse hook validates it reliably (field presence, well-formed JSON) instead of sniffing prose; it is also the anchor for reuse references (same-feature tasks point back to the exact package that produced the branch history).
+**Rationale**: machine-parseable, so a PreToolUse hook validates it reliably (field presence, well-formed JSON) instead of sniffing prose.
 
-**What the dispatch prompt carries**: the JSON block + **at most 3 lines of pointers** (paths/constraints). Never re-paste process text, contracts, feature background or memory — the child pulls those from files (index / memory / git log / SKILL.md); the standard flow (§5) is OWNED by this file, and repeating it per dispatch is drift. The main session never sends mid-flight messages to a running child.
+**What the dispatch prompt carries**: the JSON block + **at most 3 lines of pointers** (paths/constraints). Never re-paste process text, contracts, feature background or memory — the child pulls those from files (index / memory / git log / SKILL.md); the standard flow (§5) is OWNED by the executor skill, and repeating it per dispatch is drift. The main session never sends mid-flight messages to a running child.
 
-**Reuse-first composition (MUST)**: before composing any dispatch, read the feature's index history (`python3 scripts/multi-agent index show --feature-id <fid>`) and the feature-branch history when it exists. There is no agents.json registry and no role pre-definitions: the package's `objective` + `acceptance_criteria` ARE the agent's definition — shape them per task, folding in what prior entries teach. Every dispatch package's first instruction to the child is: `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the binding rules summarized in this package are abbreviated; the handbook is canonical`. The reuse loop refines dispatch composition only — routing (three states, 5 invariants) is unchanged.
+**Reuse-first composition (MUST)**: before composing any dispatch, read the feature's index history (`python3 scripts/multi-agent index show --feature-id <fid>`) and the feature-branch history when it exists. There is no agents.json registry and no role pre-definitions: the package's `objective` + `acceptance_criteria` ARE the agent's definition — shape them per task, folding in what prior entries teach. Every dispatch package's first instruction to the child is: `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the handbook is canonical`.
 
-**Reuse loop (hook-enforced)**: when `.orch-lite/index.json` already has entries for the package's `feature_id`, the package MUST carry a `reuses` field — a list of the index task_ids the main session has read before composing. The dispatch-validate hook denies a dispatch that omits `reuses` (with a digest of the prior entries: task ids, statuses, one-line summaries) and denies any unknown id, naming the valid ones. A feature with no index history needs no `reuses`; packages without a `feature_id` are unaffected. The hook is stateless, so the rule is uniform — every dispatch whose feature has index history carries `reuses`; the first is denied exactly once, which teaches the requirement.
+**Reuses are a convention, not hook-enforced**: when the feature has index history, read it first and note in the package which entries shaped the objective.
 
 **Child death**: a child that stops or fails is re-dispatched under a new task_id or reported to the user — the main session never absorbs the work itself.
 
@@ -75,11 +75,11 @@ The dispatch prompt MUST embed the package as a fenced JSON block:
 | Field | Type | Req | Description |
 |---|---|---|---|
 | `task_id` | string | yes | `{role}-{YYYYMMDD}-{seq}`; sole primary key (index key, worktree dir, commit author) |
-| `role` | string | yes | functional role (test/research/impl/review/debug/docs/deploy/custom) |
+| `role` | string | no | functional role (test/research/impl/review/debug/docs/deploy/custom); optional, defaults to "impl" |
 | `objective` | string | yes | specific, executable, verifiable |
 | `acceptance_criteria` | string[] | yes | confirmed before dispatch; the executor self-checks each |
-| `feature_id` | string | MUST | branch `feature/<feature_id>` & worktree; main-inferred, user-confirmed, reused. MUST in every dispatch: binds the package to one feature line's recorded state (branch + index + memory) so related work reuses it. The dispatch-validate hook checks the branch at dispatch time: absent → deny with two fixes — (i) NEW feature → include an explicit instruction for the child to create branch `feature/<feature_id>` from the current mainline HEAD; (ii) otherwise fix the `feature_id`. Generic (unbound) dispatches stay valid: omit `feature_id`. Before composing, the main session reads the feature's index entries (`python3 scripts/multi-agent index show --feature-id <fid>`) so their recorded conclusions shape the objective. |
-| `reuses` | string[] | conditional | Required whenever the index already has entries for the package's `feature_id`: the index task_ids the main session has read before composing. The hook validates every id (unknown → deny, naming the valid ones) and denies the omission once with a digest of the prior entries. No index history → not required. |
+| `feature_id` | string | no | optional plain binding metadata (no format gate): names the feature line — branch `feature/<feature_id>` & worktree. Binding is a CONVENTION (one feature = one branch), not enforcement: the dispatch-validate gate checks only package shape (fenced JSON, required fields, background flag, handbook pointer) and never branch existence or the index. Before composing, the main session reads the feature's index entries (`python3 scripts/multi-agent index show --feature-id <fid>`) so their recorded conclusions shape the objective. |
+| `reuses` | string[] | no | Composition convention, unvalidated by the hook: when the feature has index history, list the index task_ids whose entries shaped the objective. |
 
 ---
 

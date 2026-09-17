@@ -62,7 +62,7 @@ A child's `STUCK` report (executor handbook report state, alongside `TASK_COMPLE
 |---|---|
 | Layout | `.worktrees/<task_id>/` — one git worktree per task; the child agent's only workplace |
 | Branch | `feature/<feature_id>` — one long-lived branch per feature; merge = periodic integration, not closure; never auto-deleted (only the user removes it manually if truly abandoned) |
-| feature_id | main-inferred, user-confirmed, reused across the feature's tasks; every dispatch carries it (MUST) so work binds to this feature line's recorded state — the dispatch-validate hook checks branch `feature/<feature_id>` exists at dispatch time (absent → deny with the create-branch or fix-id fix) |
+| feature_id | main-inferred, user-confirmed, reused across the feature's tasks; optional plain metadata in dispatches. Binding is a CONVENTION (one feature = one branch), not enforcement — the dispatch-validate gate checks only package shape and never branch existence |
 | Commit authorship | child sets `GIT_AUTHOR_NAME=<task_id>` (+ local email) so history distinguishes tasks (the old `instance_id` author is retired) |
 | Main-tree protection | primary tree = main only (integration merges); children never commit to main. The integration merges themselves are the main agent's direct bookkeeping carve-out — `git checkout -b feature/<id>`, `git merge --ff-only`/`--no-edit`, `tests/run.sh`, and `.orch-lite` CLI index/memory updates are the main session's own steps, not dispatched work (nothing new is authored); content edits and content commits stay dispatched |
 | Invariant | at most ONE writable worktree per feature branch (git-enforced; a second create fails with `feature busy`) |
