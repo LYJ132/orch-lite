@@ -118,7 +118,7 @@ codex plugin add orch-lite
 
 Or open Codex and run `/plugins` to browse and install. After installation, run `/hooks` to review and trust the bundled hooks.
 
-> Plugin version 1.1.2+ bundles the Codex hooks (`sessionStart`, `preToolUse`, `subagentStart`). See [docs/codex-setup.md](docs/codex-setup.md) for enabling multi-agent v2 and trusting the hooks, and [docs/codex-subagent-start.md](docs/codex-subagent-start.md) for the SubagentStart hook design notes.
+> Plugin version 1.1.3+ bundles the Codex hooks (`sessionStart`, `preToolUse`, `subagentStart`). See [docs/codex-setup.md](docs/codex-setup.md) for enabling multi-agent v2 and trusting the hooks, and [docs/codex-subagent-start.md](docs/codex-subagent-start.md) for the SubagentStart hook design notes.
 
 ### Claude Code
 
@@ -400,7 +400,7 @@ codex plugin add orch-lite
 
 或打开 Codex 运行 `/plugins` 浏览安装。安装后运行 `/hooks` 审核并信任内置 hooks。
 
-> 插件版本 1.1.2+ 内置了 Codex hooks（`sessionStart`、`preToolUse`、`subagentStart`）。启用 multi-agent v2 与信任 hooks 见 [docs/codex-setup.md](docs/codex-setup.md)，SubagentStart hook 设计说明见 [docs/codex-subagent-start.md](docs/codex-subagent-start.md)。
+> 插件版本 1.1.3+ 内置了 Codex hooks（`sessionStart`、`preToolUse`、`subagentStart`）。启用 multi-agent v2 与信任 hooks 见 [docs/codex-setup.md](docs/codex-setup.md)，SubagentStart hook 设计说明见 [docs/codex-subagent-start.md](docs/codex-subagent-start.md)。
 
 ### Claude Code
 
