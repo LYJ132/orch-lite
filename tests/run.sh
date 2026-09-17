@@ -163,18 +163,20 @@ case_1_1() { dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" true)"; ex
 case_1_2() {
   local pkg='{"task_id": "probe-1", "role": "impl", "acceptance_criteria": ["a"]}'
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_deny "Missing: objective"
+  expect_deny "required field(s): objective"
 }
 
 case_1_3() {
+  # lightweight-core: feature_id is optional plain metadata — a bad-format id
+  # naming a nonexistent branch no longer denies (no format check, no binding)
   local pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"feature_id\": \"Bad_Branch!\"}"
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_deny "feature_id must match"
+  expect_pass
 }
 
 case_1_4() {
   dv_run "$(agent_event Agent "just prose, no fences here" true)"
-  expect_deny "Every Agent call from the main session is a dispatch"
+  expect_deny "no \`\`\`json fenced block"
 }
 
 case_1_5() {
@@ -195,7 +197,7 @@ case_1_7() {
   ev="$(agent_event Agent 'Dispatch the login fix.
 No package here — this shape is what the platform actually sends.' true)"
   dv_run "$ev"
-  expect_deny "Every Agent call from the main session is a dispatch"
+  expect_deny "no \`\`\`json fenced block"
 }
 
 case_1_8() {
@@ -258,36 +260,25 @@ case_1_12() {
   expect_deny "run_in_background"
 }
 
-# --- v7 reuse loop: reuses required when the feature has index history ---
+# --- lightweight-core: the reuse loop is REMOVED; reuses is convention only ---
 
 case_1_13() {
-  # feature_id whose feature has index history, no reuses field -> deny ONCE
-  # with a digest of the prior entries (task ids + statuses + summaries)
+  # feature_id whose feature has index history, no reuses field -> PASS
+  # (the gate no longer reads the index or requires reuses)
   local d pkg
   d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed", "objective": "first pass", "output": "did the first pass"}, "other-01": {"feature_id": "other", "status": "assigned"}}')" || return 1
   pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line"}'
   dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_deny "already has tasks in the index"
-  case "$DV_STDERR" in
-    *hist-01*completed*"did the first pass"*) : ;;
-    *) printf 'deny must carry the digest (id/status/summary), got:\n%s\n' "$DV_STDERR"; return 1 ;;
-  esac
-  case "$DV_STDERR" in
-    *other-01*) printf 'digest must only cover the feature own entries\n'; return 1 ;;
-  esac
-  case "$DV_STDERR" in
-    *"reuses"*"task_ids"*) : ;; *) printf 'deny must instruct re-sending with reuses\n'; return 1 ;;
-  esac
+  expect_pass
 }
 
 case_1_14() {
-  # reuses naming an unknown task_id -> deny listing the valid index ids
+  # reuses naming an unknown task_id -> PASS (plain metadata, unvalidated)
   local d pkg
   d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
   pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line", "reuses": ["ghost-id"]}'
   dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_deny "unknown task_id"
-  case "$DV_STDERR" in *"hist-01"*) : ;; *) printf 'deny must name the valid ids\n'; return 1 ;; esac
+  expect_pass
 }
 
 case_1_15() {
@@ -298,13 +289,13 @@ case_1_15() {
 }
 
 case_1_16() {
-  # reuses of the wrong shape (empty list / non-list) -> deny
+  # reuses of the wrong shape (empty list / non-list) -> PASS (unvalidated)
   local d pkg
   d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
   for body in '[]' '"hist-01"' '[42]'; do
     pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"feature_id\": \"hist-line\", \"reuses\": $body}"
     dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-    expect_deny "non-empty list"
+    expect_pass
   done
 }
 
@@ -348,21 +339,14 @@ case_1_20() {
 }
 
 case_1_21() {
-  # A1: feature branch absent -> deny naming BOTH fixes (create-branch
-  # instruction for a new feature; fix the feature_id otherwise)
+  # lightweight-core: branch absent + NO create-branch instruction -> PASS
+  # (the binding gate is removed; branch creation stays the child's duty per
+  # the handbook convention)
   local d pkg
   d="$(fresh_git_repo feature/other-line)" || return 1
   pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "missing-line"}'
   dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_deny "Branch feature/missing-line does not exist"
-  case "$DV_STDERR" in
-    *"create branch feature/missing-line from the current mainline HEAD"*) : ;;
-    *) printf 'deny lacks the NEW-feature create-branch fix\n'; return 1 ;;
-  esac
-  case "$DV_STDERR" in
-    *"fix the feature_id"*) : ;;
-    *) printf 'deny lacks the fix-the-feature_id fix\n'; return 1 ;;
-  esac
+  expect_pass
 }
 
 case_1_22() {
@@ -389,15 +373,22 @@ $(fenced_prompt "$pkg")"
 }
 
 case_1_24() {
-  # v6 binding: branch absent + instruction names a DIFFERENT feature_id
-  # -> still deny with the two-fix message (exact-id scoping)
+  # lightweight-core: an instruction naming a DIFFERENT feature_id -> PASS
+  # (no binding gate, so id-scoping of instructions is moot)
   local d pkg prompt
   d="$(fresh_git_repo feature/other-line)" || return 1
   pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "missing-line"}'
   prompt="context: run \`git checkout -b feature/some-other-line\` before writing.
 $(fenced_prompt "$pkg")"
   dv_run_in "$d" "$(agent_event Agent "$prompt" true)"
-  expect_deny "Branch feature/missing-line does not exist"
+  expect_pass
+}
+
+case_1_25() {
+  # lightweight-core: role is no longer required (optional, defaults to impl)
+  local pkg='{"task_id": "probe-1", "objective": "o", "acceptance_criteria": ["a"]}'
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
 }
 
 case_route_must() {
@@ -425,7 +416,7 @@ case_1_audit_shapes() {
   dv_run "$(printf '%s' '{"tool_name": "Agent", "tool_input": ["not","a","dict"]}')"
   expect_pass
   dv_run "$(printf '%s' '{"tool_name": "Agent", "tool_input": {"prompt": 42, "run_in_background": "true"}}')"
-  expect_deny "Every Agent call"  # non-str prompt coerced; still a deny, no crash
+  expect_deny "no \`\`\`json fenced block"  # non-str prompt coerced; still a deny, no crash
 }
 
 # --- Hook 3: session-init (matrix 3.1–3.6) + fail-soft audit ---
@@ -1007,7 +998,7 @@ PY
 run_case "FM.1   SKILL.md YAML frontmatter parses"        case_fm_parse
 run_case "1.1    valid fenced package + background"       case_1_1
 run_case "1.2    missing objective -> deny"               case_1_2
-run_case "1.3    bad feature_id -> deny"                  case_1_3
+run_case "1.3    bad-format feature_id naming nonexistent branch -> pass" case_1_3
 run_case "1.4    no fenced block -> deny"                 case_1_4
 run_case "1.5    malformed fenced JSON -> deny"           case_1_5
 run_case "1.6    retired instance_id ignored -> allow"    case_1_6
@@ -1017,18 +1008,19 @@ run_case "1.9    Task alias + valid package -> allow"     case_1_9
 run_case "1.10   branch-safe feature_id -> allow"         case_1_10
 run_case "1.11   background absent -> deny"               case_1_11
 run_case "1.12   run_in_background=false -> deny"         case_1_12
-run_case "1.13   feature with index history, no reuses -> digest deny" case_1_13
-run_case "1.14   unknown reuses id -> deny naming valid ids"    case_1_14
+run_case "1.13   feature with index history, no reuses -> pass (loop removed)" case_1_13
+run_case "1.14   unknown reuses id -> pass (unvalidated metadata)"    case_1_14
 run_case "1.15   handbook-first missing -> deny"          case_1_15
-run_case "1.16   reuses wrong shape -> deny"                   case_1_16
+run_case "1.16   reuses wrong shape -> pass (unvalidated)"              case_1_16
 run_case "1.17   feature with no index history -> pass w/o reuses" case_1_17
 run_case "1.18   valid reuses ids -> allow"                    case_1_18
 run_case "1.19   no feature_id -> reuse loop unaffected"      case_1_19
 run_case "1.20   v6 binding: branch exists -> pass"       case_1_20
-run_case "1.21   v6 binding: branch absent -> deny, both fixes" case_1_21
-run_case "1.22   v6 binding: no feature_id unaffected"    case_1_22
-run_case "1.23   v6 binding: branch absent + create-branch instruction -> pass" case_1_23
-run_case "1.24   v6 binding: instruction for a DIFFERENT id -> deny" case_1_24
+run_case "1.21   binding removed: branch absent, no instruction -> pass" case_1_21
+run_case "1.22   binding removed: no feature_id unaffected"    case_1_22
+run_case "1.23   binding removed: create-branch instruction -> pass" case_1_23
+run_case "1.24   binding removed: instruction for a DIFFERENT id -> pass" case_1_24
+run_case "1.25   role absent -> pass (optional, defaults to impl)" case_1_25
 run_case "ROUTE  Step 0 routing line is a MUST (B)"       case_route_must
 run_case "audit  dispatch-validate broken shapes"         case_1_audit_shapes
 run_case "3.1    fresh project bootstrap (temp copy)"     case_3_1
