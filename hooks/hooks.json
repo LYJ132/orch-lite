@@ -1,4 +1,9 @@
 {
+  "_sections": {
+    "_comment": "Section markers (JSON has no comments): 'ZCode: full dispatch gate' = the PreToolUse entry; 'Codex: injection-only (SubagentStart) + SessionStart' = the SessionStart and SubagentStart entries. Parsers must ignore unknown top-level keys.",
+    "ZCode: full dispatch gate": ["PreToolUse"],
+    "Codex: injection-only (SubagentStart) + SessionStart": ["SessionStart", "SubagentStart"]
+  },
   "hooks": {
     "SessionStart": [
       {
