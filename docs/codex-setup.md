@@ -85,7 +85,7 @@ The orch-lite plugin ships two hooks that Codex discovers automatically from the
 | `sessionStart` | Runs `session-init.py`: injects the orch-lite routing instructions and state summary at session start |
 | `preToolUse` | Matches `spawn_agent\|Agent\|Task`, runs `dispatch-validate.py` to validate sub-agent dispatch packages |
 
-After correct setup, `~/.codex/config.toml` contains (hashes below are for plugin 1.1.3; if your version differs, re-trust via `/hooks` instead of copying these):
+After correct setup, `~/.codex/config.toml` contains (hashes below are for plugin 1.2.0; if your version differs, re-trust via `/hooks` instead of copying these):
 
 ```toml
 [hooks.state."orch-lite@orch-lite:hooks/hooks.json:pre_tool_use:0:0"]

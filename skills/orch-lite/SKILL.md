@@ -142,6 +142,7 @@ Full parameters: `./scripts/multi-agent <group> --help` or [references/03-state.
 - **Reading is the other half of the loop.** Facing a hard / non-obvious problem (main or a child)? Stop and read `.orch-lite/memory.json` `experiences` before re-solving from scratch — a recorded solution is already paid for. Then, at dispatch, point the child at it (executor handbook, "Standard Flow"). This applies to the main session's own hard problems too, with the same quantified trigger the executor handbook uses: 3 failed attempts on the same problem OR ~10 minutes without progress → stop, read the `experiences` first; still unsolved → surface it to the user rather than grinding.
 - **When a child reports `STUCK`** (problem, attempts made, what memory said): read the feature's index/memory context yourself (`index show --feature-id <fid>` + `.orch-lite/memory.json`), then re-dispatch with the recorded conclusions folded into the new objective — do not just re-run the same package.
 - **Writing threshold**: record an **experience only** when a problem genuinely cost unusual time/energy to crack (not every hiccup). Condensable into a must-follow rule → **contract** instead. Unsure → ask the user.
+- **Pain feedback** — an interaction that annoyed the user or wasted agent effort — is recorded as an experience with `"tag": "pain"` and `"status": "open"` (flipped to resolved when a release addresses it), so recurring friction accumulates in the project's memory instead of evaporating.
 
 ---
 
