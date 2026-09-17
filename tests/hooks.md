@@ -166,6 +166,84 @@ changes — the hook never drifts from it.
 
 ---
 
+## Hook 4: `subagent-start.py` — SubagentStart (Codex-only), audit + cwd policy + handbook injection
+
+Codex-only lifecycle event: dispatching a subagent is a `SubagentStart`
+event, NOT a `PreToolUse` tool call (Codex's collab `spawn_agent` channel
+never triggers PreToolUse). ZCode does not support the event name and
+silently ignores it — the shared `hooks/hooks.json` entry is a capability
+probe, and the existing SessionStart / PreToolUse entries are untouched.
+
+Responsibilities (deliberately narrowed — see the rev2 design doc):
+audit logging, cwd-level scope policy, and `additionalContext` handbook
+injection. There is NO content validation of dispatch packages (the event
+input carries no prompt / tool_input, so no channel exists on Codex).
+
+Output contract (stdout JSON, per Codex's `subagent-start.command.output`
+schema):
+
+- allow + injection: `{"hookSpecificOutput": {"hookEventName":
+  "SubagentStart", "additionalContext": "[orch-lite SubagentStart] ..."}}`
+- deny: `{"continue": false, "stopReason": "<rule>", "hookSpecificOutput":
+  {"hookEventName": "SubagentStart"}}` (no additionalContext)
+- allow with `inject_handbook: false`: prints NOTHING (audit-only mode)
+- any internal error (malformed stdin, missing cwd, broken policy, git
+  unavailable, log write failure): fail-open, silent, zero output
+
+Audit: one JSON line appended per decision to
+`<cwd>/.orch-lite/subagent-start.log` and mirrored to
+`~/.orch-lite/hook-observe/subagent-start.log` (fields: v, ts, decision,
+reason, agent_id, agent_type, model, session_id, turn_id, cwd). Log write
+failures never affect the decision.
+
+### Policy file: `<project>/.orch-lite/hook-policy.json` (runtime-only, NOT shipped)
+
+```json
+{
+  "v": 1,
+  "subagent_start": {
+    "require_git_repo": false,
+    "inject_handbook": true,
+    "allowed_roots": [],
+    "blocked_roots": []
+  }
+}
+```
+
+- File absent or corrupt = **zero rules** (allow + injection); empty
+  arrays likewise. The file is runtime-only: each project opts in by
+  creating it; nothing is shipped with the plugin.
+- `"v": 1` is the policy schema version for future evolution.
+- **`require_git_repo` stays conservatively `false` at the factory default**:
+  the exact deny semantics are not yet pinned (after the thread is created,
+  does `continue:false` block the first turn or reap the thread? — design
+  doc §2.8-3). Do not enable deny-class rules by default until that is
+  verified against a live Codex spawn; projects may set it to `true`
+  themselves after confirming deny is safe.
+- `inject_handbook` is the injection-channel degradation switch:
+  additionalContext may travel the same broken encrypted pipeline as the
+  multi-agent v2 `encrypted_content` payload. If live verification shows the
+  injection never reaches the subagent rollout, set it to `false` — the hook
+  degrades to pure audit mode (deny policies and logging still apply).
+
+| # | Input | Expected | Actual |
+|---|---|---|---|
+| 4.1 | valid stdin, no policy file | exit 0; exact allow JSON (hookEventName=SubagentStart, handbook additionalContext); one audit line, decision=allow | ✅ |
+| 4.2 | policy `require_git_repo:true`, cwd a non-repo | deny JSON: `continue:false`, stopReason names require_git_repo | ✅ |
+| 4.3 | corrupt stdin | exit 0, silent, zero stdout | ✅ |
+| 4.4 | corrupt hook-policy.json | zero rules: allow + injection | ✅ |
+| 4.5 | policy `blocked_roots` containing cwd | deny JSON, stopReason names blocked_roots | ✅ |
+| 4.6 | policy `inject_handbook:false` | exit 0, zero stdout, audit line decision=allow (pure audit mode) | ✅ |
+
+> Note (2026-09-17, impl-20260914-24): rows 4.1–4.6 are executable —
+> `bash tests/run.sh` covers them (HOME pointed at a temp dir so the
+> `~/.orch-lite` audit mirror never touches the real home; the non-repo cwd
+> relies on the `GIT_CEILING_DIRECTORIES` hermetic sandbox). Live Codex
+> desktop spawn verification (trigger confirmation, injection-arrival
+> confirmation) is owner-side and pending.
+
+---
+
 ## Setup notes
 
 - **Python >= 3.9 required** by both hooks and `scripts/multi-agent`. Older
@@ -179,10 +257,13 @@ changes — the hook never drifts from it.
   `~/.agents`) must preserve permission bits (`cp -p`), not just file content.
 - Config-file hooks are disabled by default; `~/.zcode/cli/config.json` sets
   `hooks.enabled: true`.
-- Registered hooks: **SessionStart** (`session-init.py`) and **PreToolUse**
-  (`dispatch-validate.py`, matcher `Agent|Task`) only. The PostToolUse entry
+- Registered hooks: **SessionStart** (`session-init.py`), **PreToolUse**
+  (`dispatch-validate.py`, matcher `Agent|Task`) and — since 2026-09-17
+  (impl-20260914-24) — **SubagentStart** (`subagent-start.py`, Codex only;
+  ZCode silently ignores the unsupported event name). The PostToolUse entry
   was removed when `dangling-occupancy-check.py` was retired (Hook 2 above);
-  no other hook files or registrations exist.
-- Both remaining hooks are idempotent, read-only or self-limiting, and degrade
+  no other hook files or registrations exist. The SubagentStart policy file
+  (`.orch-lite/hook-policy.json`) is runtime-only and NOT shipped.
+- All three hooks are idempotent, read-only or self-limiting, and degrade
   gracefully (empty output / silent) on malformed input — they never block
   the session.

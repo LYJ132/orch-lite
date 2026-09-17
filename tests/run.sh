@@ -891,6 +891,117 @@ print(f"{len(paths)} files parse under the Python 3.9 grammar")
 PY
 }
 
+# --- Hook 4: subagent-start (Codex SubagentStart event, rev2 design) ---
+# Codex-only event (ZCode silently ignores it). Output is a stdout-JSON
+# contract: allow -> hookSpecificOutput.hookEventName=SubagentStart with
+# additionalContext; deny -> continue:false + stopReason; any internal error
+# -> silent zero-output fail-open. Policy lives at <cwd>/.orch-lite/
+# hook-policy.json (runtime-only, NOT shipped); missing/broken = zero rules.
+# The sandbox mktemp dirs are non-repos (GIT_CEILING_DIRECTORIES above), which
+# 4.2 exploits directly. HOME is pointed at a temp dir so the audit mirror
+# (~/.orch-lite/hook-observe/subagent-start.log) never touches the real home.
+
+ss_home_dir() {  # echo a temp HOME dir (registered for cleanup)
+  local d
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  printf '%s\n' "$d"
+}
+SS_HOME="$(ss_home_dir)"
+
+ss_run() {  # $1=stdin text — run the SubagentStart hook, capture stdout
+  SS_STDOUT="$(printf '%s' "$1" | HOME="$SS_HOME" python3 hooks/subagent-start.py)"
+  SS_RC=$?
+}
+
+case_4_1() {  # no policy file -> allow + handbook injection, exact JSON shape
+  local d
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  ss_run "{\"cwd\": \"$d\", \"agent_id\": \"a1\", \"agent_type\": \"impl\", \"model\": \"m\", \"session_id\": \"s1\", \"turn_id\": \"t1\"}"
+  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
+  python3 - "$SS_STDOUT" "$d" <<'PY'
+import json, sys, pathlib
+d = json.loads(sys.argv[1])
+assert d["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
+assert "skills/orch-lite-executor/SKILL.md" in d["hookSpecificOutput"]["additionalContext"]
+log = pathlib.Path(sys.argv[2], ".orch-lite", "subagent-start.log")
+rec = json.loads(log.read_text().splitlines()[-1])
+assert rec["decision"] == "allow" and rec["reason"] is None and rec["v"] == 1
+assert rec["agent_id"] == "a1" and rec["turn_id"] == "t1"
+PY
+}
+
+case_4_2() {  # require_git_repo + non-repo cwd -> deny {continue:false}
+  local d
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  mkdir -p "$d/.orch-lite"
+  printf '{"v":1,"subagent_start":{"require_git_repo":true}}' > "$d/.orch-lite/hook-policy.json"
+  ss_run "{\"cwd\": \"$d\"}"
+  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
+  python3 - "$SS_STDOUT" <<'PY'
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["continue"] is False and "require_git_repo" in d["stopReason"]
+assert d["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
+assert d["hookSpecificOutput"].get("additionalContext") is None
+PY
+}
+
+case_4_3() {  # corrupt stdin -> silent zero-output, exit 0
+  ss_run 'not json {{{ %%% <<<>>>'
+  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
+  [ -z "$SS_STDOUT" ] || { echo "expected empty stdout, got: $SS_STDOUT"; return 1; }
+}
+
+case_4_4() {  # corrupt policy file -> zero rules, allow + injection
+  local d
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  mkdir -p "$d/.orch-lite"
+  printf '%s' 'not json {{{' > "$d/.orch-lite/hook-policy.json"
+  ss_run "{\"cwd\": \"$d\"}"
+  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
+  python3 - "$SS_STDOUT" <<'PY'
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
+assert "SKILL.md" in d["hookSpecificOutput"]["additionalContext"]
+PY
+}
+
+case_4_5() {  # blocked_roots hit -> deny (policy is read from the cwd itself)
+  local d
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  mkdir -p "$d/.orch-lite"
+  printf '{"v":1,"subagent_start":{"blocked_roots":["%s"]}}' "$d" > "$d/.orch-lite/hook-policy.json"
+  ss_run "{\"cwd\": \"$d\"}"
+  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
+  python3 - "$SS_STDOUT" <<'PY'
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["continue"] is False and "blocked_roots" in d["stopReason"]
+PY
+}
+
+case_4_6() {  # inject_handbook:false -> allow, silent (pure audit mode)
+  local d
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  mkdir -p "$d/.orch-lite"
+  printf '{"v":1,"subagent_start":{"inject_handbook":false}}' > "$d/.orch-lite/hook-policy.json"
+  ss_run "{\"cwd\": \"$d\"}"
+  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
+  [ -z "$SS_STDOUT" ] || { echo "expected empty stdout, got: $SS_STDOUT"; return 1; }
+  python3 - "$d" <<'PY'
+import json, sys, pathlib
+rec = json.loads(pathlib.Path(sys.argv[1], ".orch-lite", "subagent-start.log").read_text().splitlines()[-1])
+assert rec["decision"] == "allow"
+PY
+}
+
 # --- run everything ---
 
 run_case "FM.1   SKILL.md YAML frontmatter parses"        case_fm_parse
@@ -937,6 +1048,12 @@ run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate/cross-layout" ca
 run_case "MEM   memory_set traverses list indices, clean errors" case_mem_set_list
 run_case "IDX   index --agent-id: set + read via list/show"     case_index_agent_id
 run_case "PY39  every python file parses as 3.9 (hooks + CLI)"  case_py39_parse
+run_case "4.1    subagent-start: no policy -> allow + injection + audit" case_4_1
+run_case "4.2    subagent-start: require_git_repo non-repo -> deny" case_4_2
+run_case "4.3    subagent-start: corrupt stdin -> silent zero-output" case_4_3
+run_case "4.4    subagent-start: corrupt policy -> zero rules, allow" case_4_4
+run_case "4.5    subagent-start: blocked_roots hit -> deny"      case_4_5
+run_case "4.6    subagent-start: inject_handbook:false -> audit-only" case_4_6
 
 printf '%s\n' "${SUMMARY[@]}"
 echo
