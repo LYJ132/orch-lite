@@ -1,5 +1,7 @@
 # State Files & Worktrees (index · worktrees · memory)
 
+> View, not authority: skills/orch-lite/SKILL.md is canonical; on any conflict SKILL.md wins — fix this file, not the rule.
+
 > Runtime data layout, each file's schema, and the FULL CLI parameter reference. Worktrees give isolation by construction; shared-memory writes are serialized by a CLI-internal flock.
 
 ---

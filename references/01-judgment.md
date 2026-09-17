@@ -1,6 +1,8 @@
 # Judgment & Architecture (principles · roles · naming · hierarchy)
 
-> The single store of judgment rules — read before ANY decision. Premises: agents are **ephemeral executors** (fresh session per dispatch; all state lives in files; `task_id` is the sole primary key — there is no persistent agent identity, N8 retired). Isolation is **by construction** via per-task worktrees (one writable worktree per feature branch).
+> View, not authority: skills/orch-lite/SKILL.md is canonical; on any conflict SKILL.md wins — fix this file, not the rule.
+
+> Judgment/heuristics reference — read before ANY decision. Premises: agents are **ephemeral executors** (fresh session per dispatch; all state lives in files; `task_id` is the sole primary key — there is no persistent agent identity, N8 retired). Isolation is **by construction** via per-task worktrees (one writable worktree per feature branch).
 
 ---
 
@@ -46,7 +48,7 @@ Isolate only when concurrency is real. At dispatch, the main agent reads the ind
 - **None running** → no concurrency → the child writes in the primary working tree on its `feature/<feature_id>` branch, created and checked out before its first write — NO worktree (zero isolation premium), but still never on `main`.
 - **One+ running** → concurrency is real → create a worktree for the newcomer so its writes cannot collide.
 
-Routing default (Step 0's decomposition check): for independent work — ≥2 work items with disjoint file sets and no output dependency (one consumes the other's result) — parallel dispatch via one branch each is the default; serializing them is legitimate only for a NAMED dependency or a shared-file constraint, and an awaiting-user-review gate is not a dependency (implement on the branch; the integration merge is the review point). A parallel batch is itself concurrency, so this section's gate applies unchanged: the first-dispatched child takes the primary tree on its branch, every later child gets a worktree.
+Routing default (Step 0's decomposition check in SKILL.md Request Routing): independent work parallelizes; serial only on a NAMED dependency or a shared-file constraint; an awaiting-user-review gate is not a dependency. A parallel batch is itself concurrency, so this section's gate applies unchanged: the first-dispatched child takes the primary tree on its branch, every later child gets a worktree.
 This is a "blunt" gate: it cannot see *which file* another child is writing, so concurrent-but-disjoint tasks are still worktreed. That over-isolation is one cheap `git worktree add`; the alternative (a per-file occupancy table that lets us know exactly who holds which file) is precisely the `files`/`git` occupancy tracking we retired — not worth the lifecycle cost. Zero new mechanism.
 
 ### 1.12 Shared Resources Are Protected by Mechanisms, Not Memory
@@ -59,7 +61,7 @@ No separate SOP layer. Record-time decision (N18): if it can be condensed into a
 Build a minimal skeleton → run → discover real problems → analyze → design → user confirms → write a rule/contract. Do not pre-suppose distributed scheduling, unlimited autonomy, complex state machines, or a full exception framework.
 
 ### 1.15 Errors: Minimize Post-Hoc Rework, Do Not Over-Confirm Up Front
-Errors are low-probability and never fully preventable, so the response is **not** to repeatedly ask the user / thin-slice tasks for stepwise confirmation in advance (many tasks cannot be stepwise-confirmed). Instead keep the cost of any single mistake minimal: commit incrementally (checkpoint commits — commit each completed segment as you go, not one late commit at the end), so when an error does surface only the failed tail is redone, and the committed good work survives the T2 worktree removal.
+Errors are low-probability and never fully preventable, so the response is **not** to repeatedly ask the user / thin-slice tasks for stepwise confirmation in advance. Keep the cost of any single mistake minimal — the incremental-commit discipline is invariant 4 in SKILL.md ("Commit incrementally before reporting"); follow that, not a restatement here.
 
 ---
 
@@ -168,4 +170,4 @@ Extensions: user appends as needed; main agent proposes → user confirms.
 | >3 heterogeneous parallel packages | User confirms each one's purpose/prompt/acceptance |
 | Multiple homogeneous packages | No approval; dispatch directly |
 | Parallel dispatch | ≥2 disjoint-scope packages with no dependency → same-turn parallel Agent calls, `run_in_background: true` |
-| Required info | task_id, role, objective, acceptance_criteria (+ `feature_id` — a MUST binding the dispatch to branch `feature/<feature_id>`; generic unbound dispatches stay valid via omitting it; `reuses` required when the feature already has index entries) |
+| Required info | task_id, objective, acceptance_criteria (role optional, defaults to "impl"; feature_id optional plain metadata; reuses a convention) — see SKILL.md "Dispatch Package" + 02-protocol §4 |

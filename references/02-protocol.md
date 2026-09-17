@@ -1,5 +1,7 @@
 # Protocol (collaboration · dispatch · parallel/reuse · memory rules)
 
+> View, not authority: skills/orch-lite/SKILL.md is canonical; on any conflict SKILL.md wins — fix this file, not the rule.
+
 > How agents talk, how tasks are dispatched (fenced-JSON mandate, standard flow), the parallel-decomposition/reuse contract, and the experience/contract record-time rules. Isolation is by construction (worktrees).
 
 ---

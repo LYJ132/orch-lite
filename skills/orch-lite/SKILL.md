@@ -147,11 +147,13 @@ Full parameters: `./scripts/multi-agent <group> --help` or [references/03-state.
 
 ## Reference Index (read when)
 
-| File | When |
+| File | When to consult |
 |---|---|
-| [01-judgment.md](references/01-judgment.md) | Before any judgment — principles, roles, naming, hierarchy, dispatch rules |
-| [02-protocol.md](references/02-protocol.md) | Dispatching, message formats, standard flow (§6), parallel/reuse, memory record-time rules |
-| [03-state.md](references/03-state.md) | Index/worktree/memory schemas + full CLI parameters |
+| [01-judgment.md](references/01-judgment.md) | Judgment/heuristics cases — principles, roles, naming, hierarchy, dispatch rules. Read before any judgment call |
+| [02-protocol.md](references/02-protocol.md) | Dispatch/schema lookup tables — package format, message types, standard flow pointer, parallel/reuse, memory record-time rules |
+| [03-state.md](references/03-state.md) | CLI parameters + state schemas — index/worktree/memory file formats, full `scripts/multi-agent` reference |
+
+Each reference is a view, not authority: SKILL.md is canonical; on any conflict SKILL.md wins.
 
 ---
 
