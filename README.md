@@ -120,9 +120,11 @@ Or open Codex and run `/plugins` to browse and install. After installation, run 
 
 > Plugin version 1.2.0+ bundles the Codex hooks (`sessionStart`, `preToolUse`, `subagentStart`). See [docs/codex-setup.md](docs/codex-setup.md) for enabling multi-agent v2 and trusting the hooks, and [docs/codex-subagent-start.md](docs/codex-subagent-start.md) for the SubagentStart hook design notes.
 
+> **Codex support is experimental.** What works: sessionStart context injection; the SubagentStart hooks (audit, cwd-policy, handbook injection — pending live verification); and native multi-agent v2 dispatch. What does not work yet: `preToolUse` never fires for subagent dispatches on Codex, so the dispatch-package gate has no hook enforcement on that path; and inter-agent message payloads are encrypted and unreadable by the model, so `acceptance_criteria` and handbook instructions inside a dispatch do not reach children — acceptance verification therefore moves to parent-side post-hoc checks. Both limitations need upstream platform fixes. Details: [docs/codex-setup.md](docs/codex-setup.md), [docs/codex-subagent-start.md](docs/codex-subagent-start.md).
+
 ### Claude Code
 
-Claude Code adapter lives on the `feature/claude-code` branch. **Not yet verified.**
+There is no Claude Code adapter yet — the `feature/claude-code` branch contains no adapter code (only README work landed there). The core skill runs hooks-free on any agent platform (SKILL.md conventions, `.orch-lite` state, feature-branch discipline), so it works in Claude Code today, but without hooks or platform-specific enhancements.
 
 ---
 
@@ -402,9 +404,11 @@ codex plugin add orch-lite
 
 > 插件版本 1.2.0+ 内置了 Codex hooks（`sessionStart`、`preToolUse`、`subagentStart`）。启用 multi-agent v2 与信任 hooks 见 [docs/codex-setup.md](docs/codex-setup.md)，SubagentStart hook 设计说明见 [docs/codex-subagent-start.md](docs/codex-subagent-start.md)。
 
+> **Codex 支持目前是实验性的。** 已可用的部分：sessionStart 上下文注入；SubagentStart hooks（审计、cwd 策略、handbook 注入——尚待实际运行验证）；原生 multi-agent v2 派发。尚不可用的部分：`preToolUse` 在 Codex 上不会对子 agent 派发触发，因此派发包门禁在该路径上没有 hook 强制；且 agent 间消息载荷是加密的、模型无法读取，派发中的 `acceptance_criteria` 与 handbook 指令不会到达子 agent——验收核验因此改为父侧事后检查。这两项限制都需要上游平台修复。详见 [docs/codex-setup.md](docs/codex-setup.md)、[docs/codex-subagent-start.md](docs/codex-subagent-start.md)。
+
 ### Claude Code
 
-Claude Code 适配代码位于本仓库的 `feature/claude-code` 分支。**尚未验证。**
+目前没有 Claude Code 适配器——`feature/claude-code` 分支不含适配器代码（仅落了 README 相关改动）。核心 skill 以无 hooks 方式运行在任何 agent 平台上（SKILL.md 约定、`.orch-lite` 状态、feature 分支纪律），因此在 Claude Code 中今天即可使用，但没有 hooks 或平台专属增强。
 
 ---
 
