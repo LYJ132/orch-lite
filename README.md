@@ -124,7 +124,7 @@ Or open Codex and run `/plugins` to browse and install. After installation, run 
 
 ### Claude Code
 
-The repo is structured as a Claude Code plugin from the start (`.claude-plugin/plugin.json` + `marketplace.json`, tracking the mainline version 1.2.0), so plugin install and skill loading are expected to work; the skill core also runs hooks-free. What is not yet verified is whether Claude Code loads and acts on the bundled hooks — those entries were authored against the ZCode/Codex event models and have never been tested on Claude Code; verification is pending.
+The repo ships Claude Code plugin manifests from the start (`.claude-plugin/plugin.json` + `marketplace.json`, tracking the mainline version 1.2.0), so plugin install and skill loading are expected to work. Whether the bundled hooks load and work on Claude Code is unverified: they may load and work as-is, or they may not — no testing has been done yet; verification is pending.
 
 ---
 
@@ -408,7 +408,7 @@ codex plugin add orch-lite
 
 ### Claude Code
 
-仓库从结构上就是 Claude Code 插件（`.claude-plugin/plugin.json` + `marketplace.json`，版本随主线为 1.2.0），因此插件安装与 skill 加载预期可用；核心 skill 同样可在无 hooks 模式下运行。尚未验证的是 Claude Code 是否会加载并执行内置 hooks——这些条目是按 ZCode/Codex 事件模型编写的，从未在 Claude Code 上测试过，验证待完成。
+仓库从最初就带有 Claude Code 插件清单（`.claude-plugin/plugin.json` + `marketplace.json`，版本随主线为 1.2.0），因此插件安装与 skill 加载预期可用。内置 hooks 在 Claude Code 上能否加载并生效尚未验证：可能原样可用，也可能不可用——目前尚未做任何测试，验证待完成。
 
 ---
 
