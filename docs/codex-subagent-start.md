@@ -1,16 +1,8 @@
 # SubagentStart Hook (Codex) — Design Document (rev2, archival)
 
-> **Status**: This hook is implemented in this repo as `hooks/subagent-start.py` (registered in `hooks/hooks.json`). Items 1-2 of the verification checklist (§2.6) — trigger-timestamp confirmation and additionalContext delivery confirmation on a live Codex session — are still pending owner-side live verification. This document is an internal design record kept as-is for reference; it is not user-facing setup guidance (see [codex-setup.md](codex-setup.md) for that).
-
----
-
-# orch-lite SubagentStart Hook（Codex）设计说明书
-
-> 读者：负责本特性后续开发的智能体。
-> 目标：在 orch-lite 插件中实现 `SubagentStart` hook（注册 + 脚本 + 策略文件 + 测试），完成本地实测后回填 orch-lite 仓库。
-> 本文所有结论均基于对本机 Codex 安装的实际逆向与日志取证；原文中的证据路径已做脱敏泛化（见文末证据索引说明），如需复核请在本地重新取证。
-> 撰写日期：2026-09-17。
-> **修订版本：rev2（2026-09-17）**——本版应用了六项经所有者确认的修订（复用环约束语义更正、注入通道降级开关、策略默认值保守化、脚本健壮性加固、单向断链事实、schema 版本号）；**原始证据路径已泛化脱敏**。
+> **Status**: Implemented in this repo as `hooks/subagent-start.py` (registered in `hooks/hooks.json`). Checklist items 1-2 of §2.6 (trigger-timestamp confirmation and additionalContext delivery on a live Codex session) are still pending owner-side live verification. Internal design record, not user-facing setup guidance (see [codex-setup.md](codex-setup.md) for that).
+>
+> Reader: agents doing follow-up work on this feature. All conclusions below come from local forensics of a real Codex install (rev2, 2026-09-17, six owner-approved revisions); evidence paths are generalized — re-derive locally if needed (see the evidence index at the end).
 
 ---
 
@@ -18,60 +10,29 @@
 
 - **要做什么**：给 orch-lite 插件新增一个 `SubagentStart` hook（Codex 平台），职责收缩为三件：审计、cwd 级范围策略、additionalContext 兜底注入。
 - **为什么不复用旧 hook**：旧 `PreToolUse`（dispatch-validate.py）在 Codex 上对子代理派发**从不触发**（平台缺口），且新事件 schema 里没有消息内容字段，内容门禁在 Codex 目前**没有任何 hook 能做**。
-- **不做的事**：不校验派发包内容（无通道）、不修复消息投递（hook 无能为力）、不从 index.json 读策略（写者分离，详见 §1.6）。
-- **注入通道风险（命名依赖 + 降级开关）**：additionalContext 注入本身可能走与 `encrypted_content` 相同的已损坏加密管线——若验证清单第 2 条失败（注入未到达子代理），在策略中设 `inject_handbook:false`，hook 降级为**纯审计模式**（详见 §1.3、§2.4）。
+- **不做的事**：不校验派发包内容（无通道）、不修复消息投递（hook 无能为力）、不从 index.json 读策略（写者分离，详见 §1.3）。
+- **注入通道风险（命名依赖 + 降级开关）**：additionalContext 注入可能走与 `encrypted_content` 相同的已损坏加密管线——若验证清单第 2 条失败（注入未到达子代理），在策略中设 `inject_handbook:false`，hook 降级为**纯审计模式**（deny 策略 + 日志仍生效）。
 - **验证清单**：见 §2.6；**部署路径**：见 §2.7；**未决问题**：见 §2.8。
 
 ---
 
 ## 1. 设计原因（平台调查结论）
 
-### 1.1 环境事实
+### 1.1 取证摘要（Forensics summary）
 
-| 项 | 值 |
-|---|---|
-| Codex Desktop | `<Codex Desktop version>`（商店版 MSIX，安装于系统 MSIX 应用目录下的 `app\`） |
-| codex 内核 | `<codex CLI version>`（`%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`） |
-| multi-agent v2 | 已启用：`[features] multi_agent_v2 = true`；模型目录 `<model-catalog>` 中 `<model>` 带 `"multi_agent_version": "v2"` |
-| 实测 | spawn → 独立执行 → FINAL_ANSWER 回传，链路完整跑通 |
-| 模型链路 | `<model>` 经 codex-plus-plus 本地中转（`<local-endpoint>`，wire_api=responses） |
+调查环境为商店版 Codex Desktop（MSIX）+ codex CLI，multi-agent v2 已启用（`[features] multi_agent_v2 = true` + 模型目录条目 `"multi_agent_version": "v2"`），模型经本地中转（wire_api=responses）；spawn → 子代理独立执行 → FINAL_ANSWER 回传的链路实测完整跑通。
 
-### 1.2 关键发现 A：PreToolUse 对子代理派发从不触发（平台缺口）
+**发现 A：PreToolUse 对子代理派发从不触发**（平台缺口）。四条独立证据：父线程 rollout 的 event_msg 中无任何 hook 运行事件；日志库（logs 表约 14.9 万行）`LIKE '%hook%'` 命中 0 行；行为反证——实测一次不带 fenced JSON 的 `spawn_agent` 调用成功放行（若 dispatch-validate 触发必然 exit 2 拒绝）；hook 输出临时目录只有 SessionStart 的输出文件、spawn 时刻无产出。内核侧佐证：collab 工具族走独立的 `codex_collab_agent_tool_call_event` 通道，不在普通工具 hook 管线内。**结论：旧 hook 的核心价值（fenced JSON 派发包内容校验）在 Codex 上没有挂载点——这是平台事件覆盖缺口，不是配置问题。**
 
-四个独立证据：
+**发现 B：子代理收不到消息 payload**（投递缺陷）。子线程 rollout 显示投递结构为明文信封头 + `encrypted_content` 内容块；子代理推理原话确认模型读不到加密块（"Task payload empty"），只能靠工作区瞎猜；用户自测的另外两个会话同样中招。机理：v2 inter-agent 通信（8 字段含 `encrypted_content`）配合 agent identity JWT 加密基建，设计上依赖官方 OpenAI 后端解密——自定义中转链路无人解密，模型永远看不到 payload。**对 orch-lite 的直接影响：派发包里的 acceptance_criteria、手册指令等文本，子代理当前根本收不到。**
 
-1. **rollout 无痕**：父线程 rollout（`~/.codex/sessions/<date>/<parent-rollout>.jsonl`）的 event_msg 类型只有 `item_completed / task_complete / task_started / thread_settings_applied / token_count`，没有任何 hook 运行事件。
-2. **日志库零记录**：`~/.codex/logs_2.sqlite` 的 logs 表约 14.9 万行，`LIKE '%hook%'` 命中 0 行。
-3. **行为反证**：orch-lite 已注册 PreToolUse（matcher `spawn_agent|Agent|Task`，dispatch-validate.py 会在无 fenced JSON 时 exit 2 拒绝；本机 python 3.11 可用）。实测一次**不带任何 fenced JSON** 的 `spawn_agent` 调用成功放行——若 hook 触发必然被拒。
-4. **hook_outputs 时间线**：本地 hook 输出临时目录（`<local-temp>\hook_outputs\<thread-id>\`）下只有 SessionStart 的输出文件（本线程 0:03:43 / 0:06:42 / 0:09:30 / 0:49:22 四份），spawn 时刻（0:10:01）无任何产出。
+**发现 B 的连带风险（rev2 升级为命名依赖）**：SubagentStart 的 additionalContext 注入同样走父→子的消息投递管线，**可能与 `encrypted_content` 走同一条已损坏的加密通道**——hook 正确输出注入 JSON，子代理也未必读得到。因此验证清单第 2 条（注入到达确认）是本设计的硬性命名依赖：失败即设 `inject_handbook:false` 降级为纯审计模式（已写入 §0、§1.4、§2.4、§2.6）。
 
-内核侧佐证：collab 工具（`spawn_agent / send_input / resume_agent / wait_agent / close_agent / send_message / followup_task / interrupt_agent / list_agents`）走独立的 `codex_collab_agent_tool_call_event` 事件通道，不在普通工具 hook 管线内。
-
-**结论**：旧 hook 的核心价值——fenced JSON 派发包内容校验——在 Codex 上没有挂载点。这不是配置问题，是平台事件覆盖缺口。
-
-### 1.3 关键发现 B：子代理收不到消息 payload（投递缺陷）
-
-实测投递结构（子线程 rollout `~/.codex/sessions/<date>/<child-rollout>.jsonl`）：
-
-```json
-"content": [
-  {"type": "input_text", "text": "Message Type: NEW_TASK\nTask name: /root/v2_smoke_test\nSender: /root\nPayload:\n"},
-  {"type": "encrypted_content", "encrypted_content": "This is a multi-agent v2 smoke test. Reply with..."}
-]
-```
-
-- 真正的任务文本在 `encrypted_content` 内容块里，只有信封头是明文。
-- 子代理推理原话：`"task payload only '/root/v2_smoke_test', no content"`、`"Task payload empty"`——模型读不到加密块，只能看工作区瞎猜。
-- 用户自己测的两个会话同样中招（`01a0ab06`、`01a0ab0e` 的 rollout 里同款投递）。
-- 机理：v2 的 inter-agent 通信（`InterAgentCommunication`，8 字段含 `encrypted_content`）配合 agent identity JWT / OctetKeyPair 加密基建，设计上依赖官方 OpenAI 后端解密；自定义中转链路无人解密 → 模型永远看不到 payload。
-- **对 orch-lite 的直接影响**：派发包里的 acceptance_criteria、手册指令等文本，子代理当前根本收不到。
-- **对 additionalContext 注入的连带风险（rev2 升级为命名依赖）**：SubagentStart 的 additionalContext 注入同样走父→子的消息投递管线，**可能与 `encrypted_content` 走同一条已损坏的加密通道**——即 hook 正确输出注入 JSON，子代理也未必读得到。因此验证清单第 2 条（注入到达确认）是本设计的**硬性命名依赖**：若该条实测失败，立即在策略文件中设 `inject_handbook: false`，hook 降级为**纯审计模式**（deny 策略 + 日志仍然生效，只是不再注入），降级路径已写入 §0 速览、§1.7 表与 §2.4 策略注释。
-
-### 1.4 Codex hook 事件分类学（新 hook 的能力边界来源）
+### 1.2 Codex hook 事件分类学（新 hook 的能力边界来源）
 
 内核 `HookEventsToml` 的事件枚举（二进制取证）：`PreToolUse / PermissionRequest / PostToolUse / PreCompact / PostCompact / SessionStart / SessionEnd / UserPromptSubmit / SubagentStart / SubagentStop / Stop / Interrupt`。
 
-**派发子代理在事件分类上不是 "tool use"，而是独立的 `SubagentStart` 生命周期事件**（内核内嵌 JSON schema 标题 `subagent-start.command.input` / `subagent-start.command.output`，可从 codex.exe 的 ASCII 流中直接定位提取）。
+**派发子代理在事件分类上不是 "tool use"，而是独立的 `SubagentStart` 生命周期事件**（内核内嵌 JSON schema 标题 `subagent-start.command.input` / `subagent-start.command.output`）。
 
 SubagentStart 输入 schema（9 个必填字段，**没有 prompt / tool_input**）：
 
@@ -106,24 +67,13 @@ SubagentStart 输入 schema（9 个必填字段，**没有 prompt / tool_input**
 
 对照：PreToolUse 的输入含 `tool_name / tool_input / tool_use_id`（内容可见），输出走 exit-code 契约（0 过 / 2 拒）。两者的能力差异由此注定。
 
-### 1.5 ZCode 兼容性（共享 hooks.json 的依据）
+### 1.3 能力边界结论
 
-ZCode 官方文档（`~/.zcode/cli/plugins/cache/zcode-plugins-official/zcode-guide/0.1.0/skills/diagnosing-hooks/SKILL.md`）明确：
+- **ZCode 兼容性（共享 hooks.json 的依据）**：ZCode 官方文档明确只支持七个事件（`SessionStart / UserPromptSubmit / PreToolUse / PermissionRequest / PostToolUse / PostToolUseFailure / Stop`），不支持的事件名（如 `SubagentStart`）被**静默忽略，不影响同文件其他条目**。因此共享 `hooks.json` 同时保留 PreToolUse（ZCode 用）与 SubagentStart（Codex 用）不是冗余，是能力探测：各平台只执行自己支持的部分。
+- **策略独立文件而非 index.json**：写者分离——index.json 被 multi-agent CLI 和工作流频繁重写，且其合法写者恰是被策略约束的工作流本身；失败语义解耦——"策略损坏 → 零规则放行"不应取决于 index/任务历史；且收缩后的三个职责（审计、cwd 范围、注入）不需要任务台账，SubagentStart 输入里连 feature_id/task_id 都没有，读了也没字段可匹配。可接受折中：作为 `memory.json` 的独立段（init 写一次、工作流不碰），**但不要放 index.json**。
+- **复用环约束（rev2 更正）**：在 Codex 上复用环没有任何 hook 层面的强制手段（PreToolUse 对派发从不触发）；SessionStart 注入 agent index 列表只是让主代理"知道"可复用对象，属感知提示而非强制，复用约束实际降级为模型自律（SKILL.md 契约 + 自约束）。
 
-- 支持的事件**只有七个**：`SessionStart / UserPromptSubmit / PreToolUse / PermissionRequest / PostToolUse / PostToolUseFailure / Stop`；
-- "Events such as `Notification`, `SubagentStop`, and `PreCompact` are **not** supported"，错误事件名的后果是 "the hook never triggers"——**静默忽略，不影响同文件其他条目**。
-
-结论：共享 `hooks.json` 里同时保留 PreToolUse（旧，ZCode 用）与 SubagentStart（新，Codex 用）不是冗余，是能力探测。各平台只执行自己支持的部分。
-
-### 1.6 为什么策略放独立文件而不是 index.json
-
-- **写者分离**：index.json 被 `multi-agent` CLI 和工作流频繁重写；策略若混入，CLI 一次重写/schema 演进就可能冲掉规则，且 index 的合法写者恰是被策略约束的工作流本身。
-- **失败语义解耦**：本设计"策略损坏 → 零规则放行"；若策略住在 index，刚 init 无任务时 index 近空，策略会静默失效——策略可用性不能取决于任务历史。
-- **数据无用**：收缩后的三个职责（审计、cwd 范围、注入）不需要任务台账；复用环发生在派发前的主代理侧——注意（rev2 更正）：**在 Codex 上复用环没有任何 hook 层面的强制手段**（PreToolUse 对派发从不触发，见 §1.2），SessionStart 注入 agent index 列表只是**让主代理"知道"可复用对象**，属感知提示而非强制；复用约束实际降级为模型自律（SKILL.md 契约 + 自约束）。SubagentStart 输入里连 feature_id/task_id 都没有，读了也没字段可匹配。
-- **生命周期**：index 只增不减，策略恒定几行，不该按 spawn 频率反复读大文件。
-- 可接受折中：把策略作为 `memory.json` 的独立段（由 `multi-agent init` 写一次、工作流不碰），但**不要放 index.json**。
-
-### 1.7 三个目标在 Codex 上的落点（用户已确认的方向）
+### 1.4 三个目标在 Codex 上的落点（用户已确认的方向）
 
 | 目标 | 落点 | hook 参与度 |
 |---|---|---|
@@ -132,7 +82,7 @@ ZCode 官方文档（`~/.zcode/cli/plugins/cache/zcode-plugins-official/zcode-gu
 | 正确分支 | 包内 feature_id + 子代理首动作建 `feature/<id>`（SKILL.md 契约）+ 合并时 doctor 兜底 | cwd 级范围检查（唯一能做的真策略） |
 | 后台运行 | v2 spawn 原生异步（实测秒回） | 无需 |
 | 复用倾向 | SessionStart 注入 agent index 列表（已活）+ `reuses` 字段降级为模型自约束 | 无（派发后才触发，管不了事前倾向） |
-| **断链方向（rev2 新增事实）** | **断链仅存在于父→子方向**：父发给子的任务 payload（`encrypted_content`）子代理读不到；**子→父的 FINAL_ANSWER 回传实测完好**（spawn → 执行 → 回传链路完整跑通，见 §1.1） | 据此，验收核实**从"包内容到达子代理"转向父侧事后证据核查**：以合并时验证（merge-time verification）+ `multi-agent doctor`（main-violation/作者检查）作为**指定的补偿性控制**——子代理即使拿不到包内验收标准，其产出仍在父侧合并点被事后核验 |
+| **断链方向（rev2 新增事实）** | **断链仅存在于父→子方向**：父发给子的任务 payload（`encrypted_content`）子代理读不到；**子→父的 FINAL_ANSWER 回传实测完好**（spawn → 执行 → 回传链路完整跑通） | 据此，验收核实**从"包内容到达子代理"转向父侧事后证据核查**：以合并时验证（merge-time verification）+ `multi-agent doctor`（main-violation/作者检查）作为**指定的补偿性控制**——子代理即使拿不到包内验收标准，其产出仍在父侧合并点被事后核验 |
 
 ---
 
@@ -280,20 +230,14 @@ if __name__ == "__main__":
 }
 ```
 
-语义：文件不存在或损坏 = 零规则（放行+注入）；`inject_handbook` 缺省 true。
-
-**rev2 策略注释（默认值保守化）**：
-
-- `"v": 1` 为策略文件 schema 版本号，供后续演进时识别格式。
-- `require_git_repo` 出厂**保守地保持 `false`**：deny 的确切语义尚未钉死（线程已创建后 `continue:false` 究竟阻止首轮 turn 还是回收线程，见 §2.8-3），在 §2.8-3 经真实测试钉死之前不应默认启用拒绝类规则，避免在语义不明时阻断正常派发。实测确认 deny 语义安全后，方可由各项目自行置 `true`。
-- `inject_handbook` 是注入通道的**降级开关**：additionalContext 可能与 `encrypted_content` 走同一条已损坏加密管线（§1.3 rev2 条目）。若验证清单第 2 条实测失败（注入未到达子代理 rollout），将此项设为 `false`——hook 降级为**纯审计模式**（deny 策略与日志照常，只是不再注入），避免空转注入。
+语义：文件不存在或损坏 = 零规则（放行+注入）；`inject_handbook` 缺省 true。`"v": 1` 为策略 schema 版本号，供后续演进识别格式。**rev2 策略注释（默认值保守化）**：`require_git_repo` 出厂保守地保持 `false`——deny 的确切语义尚未钉死（§2.8-3），在实测确认安全之前不应默认启用拒绝类规则，避免语义不明时阻断正常派发；`inject_handbook` 是注入通道的**降级开关**——若验证清单第 2 条实测失败（注入未到达子代理 rollout），设为 `false`，hook 降级为纯审计模式（deny 策略与日志照常，只是不再注入）。
 
 ### 2.5 行为矩阵
 
 | 场景 | 结果 |
 |---|---|
 | 无策略文件 / 策略损坏 | 放行 + 注入手册 |
-| require_git_repo 且 cwd 非仓库 | deny（stopReason 指明规则）——注意：出厂默认 `require_git_repo:false`（见 §2.4 rev2 策略注释），在 §2.8-3 deny 语义钉死前该行仅在项目显式开启时生效 |
+| require_git_repo 且 cwd 非仓库 | deny（stopReason 指明规则）——出厂默认 `require_git_repo:false`，仅在项目显式开启时生效 |
 | git 命令不可用 | 跳过该检查，放行（沿用 v6 惯例） |
 | allowed/blocked_roots 命中 | deny |
 | stdin 损坏 / 非对象 / 无 cwd | 静默放行，零输出（脚本显式判空 `if not cwd: return`，不依赖 assert） |
@@ -317,7 +261,7 @@ if __name__ == "__main__":
 ### 2.8 未决问题（实现时需实测钉死）
 
 1. **触发瞬间准确定义**：输入带父线程 `turn_id`，推断是"子线程创建即触发、早于子代理首次模型调用"，但未逐帧验证；实现后用日志时间戳对齐 rollout 即可钉死。
-2. **additionalContext 的落点形态**：SessionStart 的注入实测表现为输入侧 `hooks.additional_context` 内容项；SubagentStart 是否同款需按验证清单第 2 条确认。**且落点形态确认之外还需确认其是否被加密管线吞掉（§1.3 rev2 条目）——落点正确但内容不可达时同样触发 `inject_handbook:false` 降级。**
+2. **additionalContext 的落点形态**：SessionStart 的注入实测表现为输入侧 `hooks.additional_context` 内容项；SubagentStart 是否同款需按验证清单第 2 条确认。**且落点形态确认之外还需确认其是否被加密管线吞掉——落点正确但内容不可达时同样触发 `inject_handbook:false` 降级。**
 3. **deny 的确切语义**：线程已创建后 `continue:false` 究竟是阻止首轮 turn 还是回收线程，schema 未说明，需实测（探针 + 检查 `codex agents` 与 rollout 终态）。**本条是 `require_git_repo` 出厂默认 `false`（§2.4）的直接原因；钉死并确认安全后才能建议项目开启。**
 4. **trust_hash 行为**：修改 hooks.json 后是否强制重新信任、信任状态存于何处（疑似 state_5.sqlite / global state），需观察。
 
@@ -325,7 +269,7 @@ if __name__ == "__main__":
 
 - 上游给 `SubagentStart` 输入加 prompt/消息字段，或让 collab 工具接入 PreToolUse → 届时把 dispatch-validate 的包校验逻辑移植到新事件，内容门禁在 Codex 复活。
 - 中转层修复（codex-plus-plus `user_scripts` 或外挂改写代理：`{"type":"encrypted_content","encrypted_content":X}` → `{"type":"input_text","text":X}`）→ 子代理能读到 payload，验收标准与手册指令随包到达。**这是"验收标准到达子代理"的前置条件，与 hook 无关但必须列入依赖。**
-- 上游正修方向（值得报给 OpenAI）：非官方 provider 下 inter-agent payload 应直接投成 input_text；当时的 `<codex CLI version>` 仍为 alpha。
+- 上游正修方向（值得报给 OpenAI）：非官方 provider 下 inter-agent payload 应直接投成 input_text；当时的 codex CLI 仍为 alpha。
 
 ---
 
@@ -342,4 +286,3 @@ Evidence paths generalized from the original investigation; re-derive locally if
 | 日志库（0 条 hook 记录） | `~/.codex/logs_2.sqlite`（logs 表） |
 | ZCode hook 官方文档 | `<zcode plugin cache>\zcode-guide\<ver>\skills\diagnosing-hooks\SKILL.md` |
 | orch-lite 插件 hooks | `~/.codex/plugins/cache/orch-lite/orch-lite/<ver>/hooks/`（hooks.json / dispatch-validate.py / session-init.py） |
-| 已交付的开启指南（前置上下文） | `<user Desktop>\<multi-agent v2 开启指南>.md` |
