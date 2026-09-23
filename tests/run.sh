@@ -156,6 +156,25 @@ for key in ("name", "description"):
 PY
 }
 
+# --- hooks.json manifest (Codex strict schema) ---
+
+case_hooks_manifest() {
+  # Codex Desktop validates hooks.json STRICTLY against {description, hooks}:
+  # the 1.2.0 _sections/_comment metadata keys made it reject the whole file
+  # ("unknown field _sections"). Pin: the manifest parses and carries NO
+  # top-level keys beyond the two accepted ones (platform sectioning lives in
+  # tests/hooks.md, not in the manifest).
+  python3 - hooks/hooks.json <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+extra = set(d) - {"description", "hooks"}
+assert not extra, f"extra top-level keys (Codex strict schema): {sorted(extra)}"
+assert d.get("hooks"), "manifest has no hooks object"
+for event in ("SessionStart", "SubagentStart", "PreToolUse"):
+    assert event in d["hooks"], f"event group missing from manifest: {event}"
+PY
+}
+
 # --- Hook 1: dispatch-validate (matrix 1.1–1.12, v4 exit-code contract) ---
 
 case_1_1() { dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" true)"; expect_pass; }
@@ -996,6 +1015,7 @@ PY
 # --- run everything ---
 
 run_case "FM.1   SKILL.md YAML frontmatter parses"        case_fm_parse
+run_case "HK.1    hooks.json strict schema: parses, no extra top-level keys" case_hooks_manifest
 run_case "1.1    valid fenced package + background"       case_1_1
 run_case "1.2    missing objective -> deny"               case_1_2
 run_case "1.3    bad-format feature_id naming nonexistent branch -> pass" case_1_3
