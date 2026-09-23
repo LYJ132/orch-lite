@@ -244,6 +244,25 @@ failures never affect the decision.
 
 ---
 
+## Platform sections (hooks.json manifest)
+
+The shared `hooks/hooks.json` manifest carries only the
+platform-accepted fields (`description` if used, `hooks`); which entries
+belong to which platform lives here, since JSON cannot carry comments:
+
+| Entries | Platform section |
+|---|---|
+| PreToolUse (`dispatch-validate.py`) | ZCode: full dispatch gate |
+| SessionStart + SubagentStart | Codex: injection-only (SubagentStart) + SessionStart |
+
+> Incident lesson (hotfix of the 1.2.0 `_sections`/`_comment` markers):
+> Codex validates hooks.json strictly — no extra keys; platform sectioning
+> lives in docs, not in the manifest. An unknown top-level key makes Codex
+> Desktop reject the whole file ("unknown field `_sections`, expected
+> `description` or `hooks`"), so no manifest keys beyond the schema, ever.
+
+---
+
 ## Setup notes
 
 - **Python >= 3.9 required** by both hooks and `scripts/multi-agent`. Older
