@@ -8,3 +8,4 @@
 multi-agent/
 .orch-lite/
 .worktrees/
+__pycache__/
