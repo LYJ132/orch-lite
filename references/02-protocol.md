@@ -95,9 +95,9 @@ No worker dispatch on this platform: subagents lack the Agent tool (probe 2026-0
 
 ---
 
-## 7. Parallel Decomposition & Feature Reuse (main agent's perspective)
+## 6. Parallel Decomposition & Feature Reuse (main agent's perspective)
 
-### 7.1 Parallel-decomposition contract (T1)
+### 6.1 Parallel-decomposition contract (T1)
 Before dispatching, output a **decomposition list** — each work package with its file scope (the audit trail for parallel/serial):
 
 | Condition | Decision |
@@ -108,16 +108,16 @@ Before dispatching, output a **decomposition list** — each work package with i
 
 Parallelism is the default for independent work; serial is justified only by a NAMED dependency or a shared-file constraint — an awaiting-user-review gate is not a dependency (implement on the branch; the integration merge is the review point).
 
-### 7.2 Feature-reuse protocol
+### 6.2 Feature-reuse protocol
 1. **Reuse check**: `index show --feature-id <fid>` — feature exists → propose reusing `feature/<fid>`; new branch only for a genuinely new feature.
 2. **Context from the branch**: task #2+ reads background from the feature branch history (`git log`/`git diff`) + `index show --feature-id` products; the dispatch does NOT re-explain background.
 3. **Products survive T2**: committed to the feature branch BEFORE reporting (executor handbook, commit discipline); the index `products` entry records paths/commit.
 
 ---
 
-## 8. Experiences & Contracts (memory rules)
+## 7. Experiences & Contracts (memory rules)
 
-### 8.1 Positioning
+### 7.1 Positioning
 | | Experience | Contract |
 |---|---|---|
 | Stability | mutable, temporary, correctable | stable, long-term, fixed constraint |
@@ -129,7 +129,7 @@ Write via `memory append --array experiences|contracts --entry <JSON>`; the CLI 
 
 **Reading rule (the other half of the loop — hidden cost if skipped)**: memory written but never read is sunk cost. Any agent — child or main — **when hitting a hard / non-obvious problem, read `experiences` first** before re-deriving from scratch. Dispatch context tells the child where to look (§5); the main agent is reminded in SKILL.md.
 
-### 8.2 Record-time decision (if it can be a contract, don't write an experience)
+### 7.2 Record-time decision (if it can be a contract, don't write an experience)
 ```
 Problem / failure / lesson occurs
     ↓
@@ -140,8 +140,8 @@ Can it be condensed into a "must follow from now on" rule or flow?
     └── unsure    → ASK THE USER (do not guess)
 ```
 
-### 8.3 Refinement flow (experience → contract)
+### 7.3 Refinement flow (experience → contract)
 Experiences accumulate → a repeat pattern emerges (same-type problem ≥ 2×, or same-type severe risk ≥ 1×) → main/user proposes a contract → user confirms → write to `contracts` → children follow automatically.
 
-### 8.4 How contracts take effect
+### 7.4 How contracts take effect
 1. Write to the shared-memory `contracts` field → 2. child reads it upon receiving a task → 3. follows while executing → 4. main references it when setting task scope at dispatch.

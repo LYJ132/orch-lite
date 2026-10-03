@@ -103,12 +103,13 @@ expect_deny() {  # $1=required stderr substring — ZCode deny shape: exit 2, em
   esac
 }
 
-# Build an Agent-shaped PreToolUse event; args: tool_name, prompt, rib(true|false|absent)
+# Build an Agent-shaped PreToolUse event; args: tool_name, prompt, rib(true|false|absent),
+# description (defaults to $PKG_FID so the description==feature_id binding passes).
 agent_event() {
-  python3 - "$1" "$2" "$3" <<'PY'
+  python3 - "$1" "$2" "$3" "${4:-$PKG_FID}" <<'PY'
 import json, sys
-tool_name, prompt, rib = sys.argv[1], sys.argv[2], sys.argv[3]
-ti = {"description": "d", "prompt": prompt, "subagent_type": "impl"}
+tool_name, prompt, rib, desc = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+ti = {"description": desc, "prompt": prompt, "subagent_type": "impl"}
 if rib == "true":
     ti["run_in_background"] = True
 elif rib == "false":
@@ -117,7 +118,10 @@ print(json.dumps({"tool_name": tool_name, "tool_input": ti}))
 PY
 }
 
-PKG_OK='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"]}'
+# Target contract (1.3.0): required fields are feature_id / objective /
+# acceptance_criteria — role and reuses are deleted, task_id is gone.
+PKG_OK='{"feature_id": "probe-1", "objective": "o", "acceptance_criteria": ["a"]}'
+PKG_FID="probe-1"
 
 # Handbook-first line every dispatch prompt must carry (v5 gate).
 HANDBOOK_LINE='MANDATORY FIRST ACTION: read skills/orch-lite-executor/SKILL.md (your handbook).'
@@ -130,8 +134,8 @@ fenced_prompt_nohb() {  # same, WITHOUT the handbook-first line (gate-negative)
   printf 'context line\n\n```json\n%s\n```\n' "$1"
 }
 
-# Run dispatch-validate from a different cwd (the gate resolves the
-# .orch-lite index from the process cwd = project root, as in a live session).
+# Run dispatch-validate from a different cwd (the gate resolves the optional
+# worktree path from the process cwd = project root, as in a live session).
 dv_run_in() {  # $1=cwd, $2=event json
   ( cd "$1" && printf '%s' "$2" | python3 "$SKILL_DIR/hooks/dispatch-validate.py" 2>"$DV_ERR_FILE" )
   DV_RC=$?
@@ -180,17 +184,17 @@ PY
 case_1_1() { dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" true)"; expect_pass; }
 
 case_1_2() {
-  local pkg='{"task_id": "probe-1", "role": "impl", "acceptance_criteria": ["a"]}'
+  local pkg='{"feature_id": "probe-1", "acceptance_criteria": ["a"]}'
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_deny "required field(s): objective"
 }
 
 case_1_3() {
-  # lightweight-core: feature_id is optional plain metadata — a bad-format id
-  # naming a nonexistent branch no longer denies (no format check, no binding)
-  local pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"feature_id\": \"Bad_Branch!\"}"
+  # 1.3.0: the slug rule is enforced — feature_id names the feature/<fid>
+  # branch and the .worktrees/<fid> worktree, so a bad format denies.
+  local pkg="{\"feature_id\": \"Bad_Branch!\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"]}"
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_pass
+  expect_deny "must match"
 }
 
 case_1_4() {
@@ -204,7 +208,7 @@ case_1_5() {
 }
 
 case_1_6() {
-  local pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "instance_id": "retired-ignorer"}'
+  local pkg="{\"feature_id\": \"probe-1\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"instance_id\": \"retired-ignorer\"}"
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
 }
@@ -247,26 +251,11 @@ case_1_10() {
   expect_pass
 }
 
-# fresh_git_repo <branch> — sandbox git repo on main with one commit and
-# <branch> (refs/heads/<branch>) created; echoes the repo path.
-fresh_git_repo() {
-  local d
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  git -C "$d" init -q -b main || return 1
-  git -C "$d" -c user.name=t -c user.email=t@l commit -q --allow-empty -m base || return 1
-  git -C "$d" branch -q "$1" || return 1
-  printf '%s\n' "$d"
-}
-
-# reuse_repo <branch> <index-tasks-json> — sandbox git repo with branch and a
-# .orch-lite/index.json carrying the given tasks map; echoes the repo path.
-reuse_repo() {
-  local d
-  d="$(fresh_git_repo "$1")" || return 1
-  mkdir -p "$d/.orch-lite"
-  printf '{"tasks": %s}' "$2" > "$d/.orch-lite/index.json"
-  printf '%s\n' "$d"
+case_1_10() {
+  # slug-legal feature_id (payment) + matching description -> allow
+  local pkg='{"feature_id": "payment", "objective": "o", "acceptance_criteria": ["a"]}'
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true payment)"
+  expect_pass
 }
 
 case_1_11() {
@@ -279,27 +268,6 @@ case_1_12() {
   expect_deny "run_in_background"
 }
 
-# --- lightweight-core: the reuse loop is REMOVED; reuses is convention only ---
-
-case_1_13() {
-  # feature_id whose feature has index history, no reuses field -> PASS
-  # (the gate no longer reads the index or requires reuses)
-  local d pkg
-  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed", "objective": "first pass", "output": "did the first pass"}, "other-01": {"feature_id": "other", "status": "assigned"}}')" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line"}'
-  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_pass
-}
-
-case_1_14() {
-  # reuses naming an unknown task_id -> PASS (plain metadata, unvalidated)
-  local d pkg
-  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line", "reuses": ["ghost-id"]}'
-  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_pass
-}
-
 case_1_15() {
   # no handbook-first instruction -> deny
   dv_run "$(agent_event Agent "$(fenced_prompt_nohb "$PKG_OK")" true)"
@@ -307,107 +275,82 @@ case_1_15() {
   case "$DV_STDERR" in *skills/orch-lite-executor/SKILL.md*) : ;; *) printf 'deny must name the handbook path\n'; return 1 ;; esac
 }
 
-case_1_16() {
-  # reuses of the wrong shape (empty list / non-list) -> PASS (unvalidated)
-  local d pkg
-  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
-  for body in '[]' '"hist-01"' '[42]'; do
-    pkg="{\"task_id\": \"probe-1\", \"role\": \"impl\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"feature_id\": \"hist-line\", \"reuses\": $body}"
-    dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-    expect_pass
-  done
+# --- v8 target contract: description == feature_id binding + worktree checks ---
+
+case_1_26() {
+  # description != feature_id -> deny (the description binds the agent for resume)
+  dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" true some-other-desc)"
+  expect_deny "description == feature_id"
 }
 
-case_1_17() {
-  # feature_id with NO index history -> passes WITHOUT reuses (loop only fires
-  # when the feature already has entries); index exists but has no such feature
-  local d pkg
-  d="$(reuse_repo feature/fresh-line '{"hist-01": {"feature_id": "other-feature", "status": "completed"}}')" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "fresh-line"}'
-  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_pass
+case_1_27() {
+  # description absent from tool_input -> deny (binding cannot hold)
+  local ev prompt
+  prompt="$(fenced_prompt "$PKG_OK")"
+  ev="$(python3 - "$prompt" <<'PY'
+import json, sys
+print(json.dumps({"tool_name": "Agent", "tool_input": {"prompt": sys.argv[1], "run_in_background": True}}))
+PY
+)"
+  dv_run "$ev"
+  expect_deny "description == feature_id"
 }
 
-case_1_18() {
-  # valid reuses ids -> allow
-  local d pkg
-  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}, "hist-02": {"feature_id": "hist-line", "status": "failed"}}')" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "hist-line", "reuses": ["hist-01", "hist-02"]}'
-  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_pass
+case_1_28() {
+  # worktree field of the wrong shape -> deny
+  local pkg="{\"feature_id\": \"probe-1\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"worktree\": \".worktrees/some-other-fid\"}"
+  dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_deny "worktree field must be"
 }
 
-case_1_19() {
-  # package WITHOUT feature_id is unaffected by the reuse loop, even when the
-  # index is full of history
-  local d
-  d="$(reuse_repo feature/hist-line '{"hist-01": {"feature_id": "hist-line", "status": "completed"}}')" || return 1
-  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" true)"
-  expect_pass
-}
-
-# --- v6 feature-branch binding (packages WITH a feature_id only) ---
-
-case_1_20() {
-  # A1: feature branch exists -> pass silently
-  local d pkg
-  d="$(fresh_git_repo feature/existing-line)" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "existing-line"}'
-  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_pass
-}
-
-case_1_21() {
-  # lightweight-core: branch absent + NO create-branch instruction -> PASS
-  # (the binding gate is removed; branch creation stays the child's duty per
-  # the handbook convention)
-  local d pkg
-  d="$(fresh_git_repo feature/other-line)" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "missing-line"}'
-  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_pass
-}
-
-case_1_22() {
-  # A1: package WITHOUT feature_id is unaffected by the binding gate, even
-  # outside any git repo (fail-open for git, no deny)
+case_1_29() {
+  # worktree shape right but directory absent -> deny
   local d pkg
   d="$(mktemp -d)" || return 1
   TMP_DIRS+=("$d")
-  pkg="$PKG_OK"
+  pkg="{\"feature_id\": \"probe-1\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"worktree\": \".worktrees/probe-1\"}"
   dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_pass
+  expect_deny "does not exist"
 }
 
-case_1_23() {
-  # v6 binding: branch absent + prompt carries the create-branch instruction
-  # for THIS feature_id -> pass (new-feature dispatch is no longer a deadlock)
-  local d pkg prompt
-  d="$(fresh_git_repo feature/other-line)" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "fresh-line"}'
-  prompt="context line: create branch with \`git checkout -b feature/fresh-line\` from mainline HEAD.
-$(fenced_prompt "$pkg")"
-  dv_run_in "$d" "$(agent_event Agent "$prompt" true)"
-  expect_pass
-}
-
-case_1_24() {
-  # lightweight-core: an instruction naming a DIFFERENT feature_id -> PASS
-  # (no binding gate, so id-scoping of instructions is moot)
-  local d pkg prompt
-  d="$(fresh_git_repo feature/other-line)" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "missing-line"}'
-  prompt="context: run \`git checkout -b feature/some-other-line\` before writing.
-$(fenced_prompt "$pkg")"
-  dv_run_in "$d" "$(agent_event Agent "$prompt" true)"
+case_1_30() {
+  # worktree shape right + directory exists -> allow
+  local d pkg
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  mkdir -p "$d/.worktrees/probe-1" || return 1
+  pkg="{\"feature_id\": \"probe-1\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"worktree\": \".worktrees/probe-1\"}"
+  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
 }
 
 case_1_25() {
-  # lightweight-core: role is no longer required (optional, defaults to impl)
-  local pkg='{"task_id": "probe-1", "objective": "o", "acceptance_criteria": ["a"]}'
+  # feature_id is REQUIRED: a package without it denies (role/reuses/task_id
+  # are deleted fields, not optional ones)
+  local pkg='{"objective": "o", "acceptance_criteria": ["a"]}'
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_pass
+  expect_deny "required field(s): feature_id"
+}
+
+case_gate_notice() {
+  # Regression pin: the SessionStart GATE_NOTICE is rendered from the gate
+  # constants in dispatch-validate.py and names NO field outside them — the
+  # deleted fields (reuses / task_id / role) must never reappear.
+  local json
+  json="$(printf '{}' | python3 hooks/session-init.py)" || return 1
+  python3 - "$json" <<'PY'
+import json, sys
+ctx = json.loads(sys.argv[1])["additionalContext"]
+marker = "--- Dispatch gate (hook-enforced) ---\n"
+i = ctx.index(marker) + len(marker)
+j = ctx.find("\n\n--- ", i)
+notice = ctx[i:j if j != -1 else len(ctx)].strip()
+for banned in ("reuses", "task_id", "role"):
+    assert banned not in notice, f"notice names deleted field: {banned}"
+for required in ("feature_id", "objective", "acceptance_criteria", "run_in_background"):
+    assert required in notice, f"notice misses gate constant: {required}"
+assert "skills/orch-lite-executor/SKILL.md" in notice, "notice misses the handbook path"
+PY
 }
 
 case_route_must() {
@@ -1018,29 +961,24 @@ run_case "FM.1   SKILL.md YAML frontmatter parses"        case_fm_parse
 run_case "HK.1    hooks.json strict schema: parses, no extra top-level keys" case_hooks_manifest
 run_case "1.1    valid fenced package + background"       case_1_1
 run_case "1.2    missing objective -> deny"               case_1_2
-run_case "1.3    bad-format feature_id naming nonexistent branch -> pass" case_1_3
+run_case "1.3    bad-format feature_id -> deny (slug rule)" case_1_3
 run_case "1.4    no fenced block -> deny"                 case_1_4
 run_case "1.5    malformed fenced JSON -> deny"           case_1_5
 run_case "1.6    retired instance_id ignored -> allow"    case_1_6
 run_case "1.7    real-shaped no-fence input -> deny"      case_1_7
 run_case "1.8    malformed stdin -> fail-open exit 0"        case_1_8
 run_case "1.9    Task alias + valid package -> allow"     case_1_9
-run_case "1.10   branch-safe feature_id -> allow"         case_1_10
+run_case "1.10   slug-legal feature_id + matching description -> allow" case_1_10
 run_case "1.11   background absent -> deny"               case_1_11
 run_case "1.12   run_in_background=false -> deny"         case_1_12
-run_case "1.13   feature with index history, no reuses -> pass (loop removed)" case_1_13
-run_case "1.14   unknown reuses id -> pass (unvalidated metadata)"    case_1_14
 run_case "1.15   handbook-first missing -> deny"          case_1_15
-run_case "1.16   reuses wrong shape -> pass (unvalidated)"              case_1_16
-run_case "1.17   feature with no index history -> pass w/o reuses" case_1_17
-run_case "1.18   valid reuses ids -> allow"                    case_1_18
-run_case "1.19   no feature_id -> reuse loop unaffected"      case_1_19
-run_case "1.20   v6 binding: branch exists -> pass"       case_1_20
-run_case "1.21   binding removed: branch absent, no instruction -> pass" case_1_21
-run_case "1.22   binding removed: no feature_id unaffected"    case_1_22
-run_case "1.23   binding removed: create-branch instruction -> pass" case_1_23
-run_case "1.24   binding removed: instruction for a DIFFERENT id -> pass" case_1_24
-run_case "1.25   role absent -> pass (optional, defaults to impl)" case_1_25
+run_case "1.25   feature_id missing -> deny (required)"   case_1_25
+run_case "1.26   description != feature_id -> deny"       case_1_26
+run_case "1.27   description absent -> deny"              case_1_27
+run_case "1.28   worktree wrong shape -> deny"            case_1_28
+run_case "1.29   worktree dir missing -> deny"            case_1_29
+run_case "1.30   worktree shape + dir exist -> allow"     case_1_30
+run_case "GATE   GATE_NOTICE rendered from gate constants, no deleted fields" case_gate_notice
 run_case "ROUTE  Step 0 routing line is a MUST (B)"       case_route_must
 run_case "audit  dispatch-validate broken shapes"         case_1_audit_shapes
 run_case "3.1    fresh project bootstrap (temp copy)"     case_3_1

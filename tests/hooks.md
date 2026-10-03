@@ -36,59 +36,57 @@ re-sent with the fenced block. Calls whose `run_in_background` is not exactly
 `true` are also **DENIED** — dispatches must be background so the main
 session returns to the user immediately.
 
-v7 reuse loop (same block-and-re-send loop): when the package's `feature_id`
-already has entries in `.orch-lite/index.json` (project cwd), the package
-must carry a `reuses` field listing the index task_ids the main session has
-read. Omission denies ONCE with a digest of the prior entries (task ids,
-statuses, one-line summaries); an unknown id denies naming the valid ones. A
-feature with no index history passes without `reuses`; packages without a
-`feature_id` are unaffected. The hook is stateless, so every dispatch whose
-feature has index history carries `reuses` — the digest denial teaches it.
-
-Enforces N15 (amended): a dispatch must carry 4 required fields
-(`task_id` / `role` / `objective` / `acceptance_criteria`); the optional
-`feature_id` must match `^[a-z0-9][a-z0-9._-]*$` (it names the
-`feature/<feature_id>` branch). `instance_id` is RETIRED — not required,
-ignored when present.
+Enforces the **1.3.0 target contract** (constants single-sourced in
+`hooks/dispatch-validate.py`; `hooks/session-init.py` renders the SessionStart
+GATE_NOTICE from the same constants): required fields are `feature_id` /
+`objective` / `acceptance_criteria` — `role` and `reuses` are DELETED (the
+dispatch tool IS the role; reuse is `git log feature/<fid>`) and `task_id` is
+gone (`feature_id` is the one key). The `feature_id` slug rule
+(`^[a-z0-9][a-z0-9._-]*$`) is enforced — it names the `feature/<feature_id>`
+branch and the `.worktrees/<feature_id>` worktree. The Agent tool's
+`description` must equal the package's `feature_id` (the binding that makes
+the agent resumable by feature). An optional `worktree` field must equal
+`.worktrees/<feature_id>` and the directory must already exist.
+`instance_id` stays RETIRED — not required, ignored when present.
 
 | # | Input | Expected | Actual |
 |---|---|---|---|
-| 1.1 | valid fenced JSON (all 4 required fields) + `run_in_background: true` | exit 0, empty stdout | ✅ |
-| 1.2 | fenced JSON missing `objective` (+ background) | exit 2, stderr: `...Missing: objective` | ✅ |
-| 1.3 | fenced JSON + `feature_id: "Bad_Branch!"` (+ background) | exit 2, stderr: `...feature_id must match [a-z0-9][a-z0-9._-]* (used as the feature/<feature_id> branch name)` | ✅ |
-| 1.4 | prompt without any fenced block | exit 2, stderr: `Every Agent call from the main session is a dispatch: re-send the call with a ```json fenced block in the prompt containing task_id / role / objective / acceptance_criteria (+ optional feature_id)` | ✅ |
+| 1.1 | valid fenced JSON (all 3 required fields) + `run_in_background: true` + matching `description` | exit 0, empty stdout | ✅ |
+| 1.2 | fenced JSON missing `objective` (+ background) | exit 2, stderr: `...required field(s): objective` | ✅ |
+| 1.3 | fenced JSON + `feature_id: "Bad_Branch!"` (+ background) | exit 2, stderr: `...must match ^[a-z0-9][a-z0-9._-]*$ (it names the feature/<feature_id> branch and the .worktrees/<feature_id> worktree)` | ✅ |
+| 1.4 | prompt without any fenced block | exit 2, stderr: `no ```json fenced block found` | ✅ |
 | 1.5 | fenced block containing malformed JSON (+ background) | exit 2, stderr: `dispatch fenced block is not valid JSON` | ✅ |
 | 1.6 | fenced JSON incl. legacy `instance_id` field (+ background) | exit 0, empty stdout (instance_id retired, ignored) | ✅ |
-| 1.7 | real-shaped Agent `tool_input` (description/prompt/subagent_type/run_in_background), no fenced JSON | exit 2 (no-block reason on stderr) — the case that was dead under v1's marker sniffing | ✅ |
+| 1.7 | real-shaped Agent `tool_input` (description/prompt/subagent_type/run_in_background), no fenced JSON | exit 2 (no-block reason on stderr) | ✅ |
 | 1.8 | malformed JSON on stdin | fail-open: exit 0, empty stdout, one-line stderr diagnostic | ✅ |
 | 1.9 | `tool_name: Task` alias, valid fenced JSON + background | exit 0, empty stdout | ✅ |
-| 1.10 | fenced JSON + valid `feature_id: "payment"` + background | exit 0, empty stdout | ✅ |
-| 1.11 | valid fenced JSON but `run_in_background` absent | exit 2, stderr: `Dispatches must run in the background (run_in_background=true) so the main session returns to the user immediately; re-send with run_in_background set to exactly true` | ✅ |
+| 1.10 | slug-legal `feature_id: "payment"` + matching description | exit 0, empty stdout | ✅ |
+| 1.11 | valid fenced JSON but `run_in_background` absent | exit 2, stderr: `run_in_background must be exactly true` | ✅ |
 | 1.12 | valid fenced JSON but `run_in_background: false` | exit 2 (foreground reason on stderr, as 1.11) | ✅ |
-| 1.13 | `feature_id` whose feature has index history, no `reuses` field | exit 2, stderr: digest of the feature's own entries (task id / status / summary) + instruction to re-send with `reuses` | ✅ |
-| 1.14 | `reuses` naming an unknown task_id | exit 2, stderr lists the valid index task_ids | ✅ |
 | 1.15 | prompt without the handbook-first instruction (no `skills/orch-lite-executor/SKILL.md` line) | exit 2, stderr names the handbook path | ✅ |
-| 1.16 | `reuses` of a wrong shape (empty list / non-list / non-string item) | exit 2, stderr asks for a non-empty list of index task_ids | ✅ |
-| 1.17 | `feature_id` with NO index history (index present, other features only) | exit 0 — no `reuses` required | ✅ |
-| 1.18 | `reuses` with valid index task_ids + handbook-first line | exit 0, empty stdout | ✅ |
-| 1.19 | package WITHOUT `feature_id` while the index is full of history | exit 0 (reuse loop unaffected) | ✅ |
-| 1.20 | v6 binding: package with `feature_id` whose branch `feature/<fid>` exists (sandbox repo) | exit 0, empty stdout | ✅ |
-| 1.21 | v6 binding: `feature_id` whose branch is absent | exit 2, stderr names both fixes: create branch `feature/<fid>` from mainline HEAD (new feature) or fix the `feature_id` | ✅ |
-| 1.22 | v6 binding: package without `feature_id` in a non-repo cwd | exit 0 (binding gate unaffected; git fail-open) | ✅ |
+| 1.25 | fenced JSON without `feature_id` | exit 2, stderr: `...required field(s): feature_id` | ✅ |
+| 1.26 | `description` differs from the package's `feature_id` | exit 2, stderr names the `description == feature_id` binding | ✅ |
+| 1.27 | `description` absent from `tool_input` | exit 2 (binding cannot hold) | ✅ |
+| 1.28 | `worktree` field of the wrong shape (`.worktrees/some-other-fid`) | exit 2, stderr: `worktree field must be .worktrees/<feature_id>` | ✅ |
+| 1.29 | `worktree` shape right but the directory does not exist in the cwd | exit 2, stderr: `does not exist` | ✅ |
+| 1.30 | `worktree` shape right + directory exists (sandbox cwd) | exit 0, empty stdout | ✅ |
 | ROUTE | SKILL.md Step 0: routing line restated as a MUST; self-repair clause and the three `[routing]` states intact | assertions on the Request Routing section | ✅ |
+| GATE | session-init output: the `--- Dispatch gate (hook-enforced) ---` notice | rendered from the gate constants; names NO deleted field (`reuses` / `task_id` / `role`), names every gate constant | ✅ |
 
-Hard enforcement (1.4, 1.7, 1.11–1.12) is the v3 design point: the fenced
+Hard enforcement (1.4, 1.7, 1.11–1.12) is the design point: the fenced
 block is the only dispatch marker that actually reaches the hook, and its
-absence now blocks the call instead of passing through; foreground calls are
+absence blocks the call instead of passing through; foreground calls are
 blocked so the main session always returns to the user immediately. When a
-fenced block + background is present it is a dispatch and must satisfy N15:
-4 required fields (1.1–1.2), optional `feature_id` safe as a branch-name
-component (1.3, 1.10), retired `instance_id` ignored (1.6).
+fenced block + background is present it is a dispatch and must satisfy the
+target contract: 3 required fields (1.1–1.2), a slug-legal `feature_id`
+(1.3, 1.10), the `description == feature_id` binding (1.26–1.27), the
+optional-worktree checks (1.28–1.30), and retired `instance_id` ignored (1.6).
 
 v3 behavior retained (2026-09-12 decision): the hook validates the
-fenced-JSON package only — the six-rule MUST template is a prompt-shape
-requirement owned by SKILL.md's "Dispatch Package (MUST template)" section,
-not a hook validation rule.
+fenced-JSON package only — the MUST template is a prompt-shape requirement
+owned by SKILL.md's "Dispatch Package (MUST template)" section, not a hook
+validation rule (the handbook pointer is the one prompt-shape check the gate
+duplicates).
 
 ---
 

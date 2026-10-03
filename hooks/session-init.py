@@ -49,6 +49,7 @@ if sys.version_info < (3, 9):
     )
     sys.exit(0)
 
+import importlib.util
 import json
 import re
 import subprocess
@@ -97,15 +98,40 @@ INDEX_SKELETON = '{"tasks": {}}'
 MEMORY_SKELETON = '{"common_knowledge": {}, "experiences": [], "task_patterns": {}, "contracts": []}'
 
 # Fixed visibility line: the dispatch gate must be seen from session start.
-GATE_NOTICE = (
-    "Dispatch gate: every Agent dispatch is hook-validated — its package must "
-    "carry the required fields (task_id / role / objective / "
-    "acceptance_criteria, run_in_background=true) and its first instruction "
-    "must tell the child to read skills/orch-lite-executor/SKILL.md; when the "
-    "package's feature already has index entries, it must also carry a "
-    "`reuses` field listing the index task_ids the main session has read; "
-    "dispatches missing any of this are blocked before they run."
-)
+# Single-sourced: rendered from the gate contract constants that live in
+# dispatch-validate.py (the enforcer) — importlib, because the filename
+# carries a hyphen. Any load failure degrades to a generic notice that names
+# no field (never re-introduce a drifted field list here).
+def _load_gate_module():
+    gate_path = Path(__file__).resolve().parent / "dispatch-validate.py"
+    spec = importlib.util.spec_from_file_location(
+        "orch_lite_dispatch_validate", gate_path
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+try:
+    _GATE = _load_gate_module()
+    GATE_NOTICE = (
+        "Dispatch gate: every Agent dispatch is hook-validated — its package "
+        "must carry the required fields ("
+        + ", ".join(_GATE.REQUIRED_FIELDS) + ", " + _GATE.BACKGROUND_FLAG
+        + "=true) and its first instruction must tell the child to read "
+        + _GATE.HANDBOOK_PATH
+        + "; the tool description must equal the package's feature_id ("
+        + _GATE.DESCRIPTION_BINDING
+        + "); a concurrent dispatch adds its worktree ("
+        + _GATE.WORKTREE_PREFIX + "<feature_id>, the directory must exist). "
+        "Dispatches missing any of this are blocked before they run."
+    )
+except Exception:
+    GATE_NOTICE = (
+        "Dispatch gate: every Agent dispatch is hook-validated (the gate "
+        "contract could not be loaded; see the Dispatch Package template in "
+        "the orch-lite SKILL.md)."
+    )
 
 
 def _write_if_absent(path: Path, content: str) -> bool:
