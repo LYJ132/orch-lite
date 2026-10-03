@@ -118,13 +118,13 @@ codex plugin add orch-lite
 
 Or open Codex and run `/plugins` to browse and install. After installation, run `/hooks` to review and trust the bundled hooks.
 
-> Plugin version 1.2.1+ bundles the Codex hooks (`sessionStart`, `preToolUse`, `subagentStart`). See [docs/codex-setup.md](docs/codex-setup.md) for enabling multi-agent v2 and trusting the hooks, and [docs/codex-subagent-start.md](docs/codex-subagent-start.md) for the SubagentStart hook design notes.
+> Plugin version 1.3.0+ bundles the Codex hooks (`sessionStart`, `preToolUse`). See [docs/codex-setup.md](docs/codex-setup.md) for enabling multi-agent v2 and trusting the hooks.
 
-> **Codex support is experimental.** What works: sessionStart context injection; the SubagentStart hooks (audit, cwd-policy, handbook injection — pending live verification); and native multi-agent v2 dispatch. What does not work yet: `preToolUse` never fires for subagent dispatches on Codex, so the dispatch-package gate has no hook enforcement on that path; and inter-agent message payloads are encrypted and unreadable by the model, so `acceptance_criteria` and handbook instructions inside a dispatch do not reach children — acceptance verification therefore moves to parent-side post-hoc checks. Both limitations need upstream platform fixes. Details: [docs/codex-setup.md](docs/codex-setup.md), [docs/codex-subagent-start.md](docs/codex-subagent-start.md).
+> **Codex support is experimental.** What works: sessionStart context injection and native multi-agent v2 dispatch. What does not work yet: `preToolUse` never fires for subagent dispatches on Codex, so the dispatch-package gate has no hook enforcement on that path; and inter-agent message payloads are encrypted and unreadable by the model, so `acceptance_criteria` and handbook instructions inside a dispatch do not reach children — acceptance verification therefore moves to parent-side post-hoc checks. Both limitations need upstream platform fixes. Details: [docs/codex-setup.md](docs/codex-setup.md).
 
 ### Claude Code
 
-The repo ships Claude Code plugin manifests from the start (`.claude-plugin/plugin.json` + `marketplace.json`, tracking the mainline version 1.2.1), so plugin install and skill loading are expected to work. Whether the bundled hooks load and work on Claude Code is unverified: they may load and work as-is, or they may not — no testing has been done yet; verification is pending.
+The repo ships Claude Code plugin manifests from the start (`.claude-plugin/plugin.json` + `marketplace.json`, tracking the mainline version 1.3.0), so plugin install and skill loading are expected to work. Whether the bundled hooks load and work on Claude Code is unverified: they may load and work as-is, or they may not — no testing has been done yet; verification is pending.
 
 ---
 
@@ -182,7 +182,7 @@ Background agents, task state, Git, and worktrees exist to support the workflow 
 At a high level, Orch-lite does four things:
 
 1. **Dispatches execution** — the main session handles intent, conversation, routing, and decisions; concrete write/execution work is dispatched to background Agents.
-2. **Persists task state** — `.orch-lite/index.json` tracks background tasks independently of any single session.
+2. **Keeps state in git** — feature branches, worktrees, and branch history track background work independently of any single session (no state file).
 3. **Isolates concurrent work when needed** — Git branches and worktrees keep concurrent tasks from unnecessarily interfering with each other.
 4. **Reuses work and conclusions** — existing Agent sessions and historical task conclusions can be reused instead of repeatedly starting from zero.
 
@@ -200,11 +200,11 @@ Orch-lite defines responsibilities through two skills:
 
 The main session focuses on the human-facing workflow. The child Agent handles the concrete execution.
 
-### Task tracking: `.orch-lite/index.json`
+### Task tracking: git branches
 
-Background task state lives on disk rather than inside one conversation. This makes task status queryable and resumable even when a session ends or an Agent changes.
+Background work state lives in git rather than inside one conversation. Each feature gets one long-lived `feature/<feature-id>` branch; branch history, `git worktree list`, and merged-branch state make work status queryable and resumable even when a session ends or an Agent changes.
 
-The task record contains information such as the objective, acceptance criteria, status, products, and executing Agent.
+The branch IS the record: commits (authored by the feature id), products, and integration state.
 
 ### Isolation and parallelism
 
@@ -228,9 +228,7 @@ Git isolation is applied when concurrent work makes it useful:
 
 ### Reuse
 
-Before dispatching new work, Orch-lite can inspect relevant task history and reuse prior conclusions. When an existing Agent context is still useful, continuation can avoid rebuilding context from scratch.
-
-Experiences and durable contracts can also be stored separately in `.orch-lite/memory/shared.json` for later reuse.
+Before dispatching new work, Orch-lite can inspect the feature's branch history (`git log feature/<fid>`) and reuse prior conclusions. When an existing Agent context is still useful, continuation can avoid rebuilding context from scratch.
 
 </details>
 
@@ -402,13 +400,13 @@ codex plugin add orch-lite
 
 或打开 Codex 运行 `/plugins` 浏览安装。安装后运行 `/hooks` 审核并信任内置 hooks。
 
-> 插件版本 1.2.1+ 内置了 Codex hooks（`sessionStart`、`preToolUse`、`subagentStart`）。启用 multi-agent v2 与信任 hooks 见 [docs/codex-setup.md](docs/codex-setup.md)，SubagentStart hook 设计说明见 [docs/codex-subagent-start.md](docs/codex-subagent-start.md)。
+> 插件版本 1.3.0+ 内置了 Codex hooks（`sessionStart`、`preToolUse`）。启用 multi-agent v2 与信任 hooks 见 [docs/codex-setup.md](docs/codex-setup.md)。
 
-> **Codex 支持目前是实验性的。** 已可用的部分：sessionStart 上下文注入；SubagentStart hooks（审计、cwd 策略、handbook 注入——尚待实际运行验证）；原生 multi-agent v2 派发。尚不可用的部分：`preToolUse` 在 Codex 上不会对子 agent 派发触发，因此派发包门禁在该路径上没有 hook 强制；且 agent 间消息载荷是加密的、模型无法读取，派发中的 `acceptance_criteria` 与 handbook 指令不会到达子 agent——验收核验因此改为父侧事后检查。这两项限制都需要上游平台修复。详见 [docs/codex-setup.md](docs/codex-setup.md)、[docs/codex-subagent-start.md](docs/codex-subagent-start.md)。
+> **Codex 支持目前是实验性的。** 已可用的部分：sessionStart 上下文注入；原生 multi-agent v2 派发。尚不可用的部分：`preToolUse` 在 Codex 上不会对子 agent 派发触发，因此派发包门禁在该路径上没有 hook 强制；且 agent 间消息载荷是加密的、模型无法读取，派发中的 `acceptance_criteria` 与 handbook 指令不会到达子 agent——验收核验因此改为父侧事后检查。这两项限制都需要上游平台修复。详见 [docs/codex-setup.md](docs/codex-setup.md)。
 
 ### Claude Code
 
-仓库从最初就带有 Claude Code 插件清单（`.claude-plugin/plugin.json` + `marketplace.json`，版本随主线为 1.2.1），因此插件安装与 skill 加载预期可用。内置 hooks 在 Claude Code 上能否加载并生效尚未验证：可能原样可用，也可能不可用——目前尚未做任何测试，验证待完成。
+仓库从最初就带有 Claude Code 插件清单（`.claude-plugin/plugin.json` + `marketplace.json`，版本随主线为 1.3.0），因此插件安装与 skill 加载预期可用。内置 hooks 在 Claude Code 上能否加载并生效尚未验证：可能原样可用，也可能不可用——目前尚未做任何测试，验证待完成。
 
 ---
 
@@ -466,7 +464,7 @@ Agent 继续
 从用户视角看，Orch-lite 主要做四件事：
 
 1. **派发执行** — 主会话负责理解意图、对话、路由与决策；具体写入和执行工作交给后台 Agent。
-2. **任务状态落盘** — `.orch-lite/index.json` 独立记录后台任务，不依赖某一次会话。
+2. **状态落在 git** — feature 分支、worktree 与分支历史独立记录后台工作，不依赖某一次会话（无状态文件）。
 3. **需要时隔离并行工作** — 通过 Git 分支和 worktree，在并发任务真正需要时隔离工作区。
 4. **复用已有工作与结论** — 优先利用已有 Agent 上下文和历史任务结论，减少重复劳动。
 
@@ -484,11 +482,11 @@ Orch-lite 通过两份 Skill 划分职责：
 
 主会话聚焦人与 Agent 的交互工作流，子 Agent 负责具体执行。
 
-### 任务追踪：`.orch-lite/index.json`
+### 任务追踪：git 分支
 
-后台任务状态落在磁盘上，而不是某一次对话里。因此即使会话结束或 Agent 发生变化，任务仍然可以被查询和恢复。
+后台工作的状态落在 git 里，而不是某一次对话里。每个 feature 对应一条长期存在的 `feature/<feature-id>` 分支；分支历史、`git worktree list` 与合并状态使得即使会话结束或 Agent 发生变化，工作状态仍然可以被查询和恢复。
 
-任务记录包括目标、验收标准、状态、产物以及实际执行 Agent 等信息。
+分支本身就是记录：提交（以 feature id 署名）、产物与整合状态。
 
 ### 隔离与并行
 
@@ -512,9 +510,7 @@ Git 隔离按实际并发需求启用：
 
 ### 复用
 
-派发新任务前，Orch-lite 可以检查相关任务历史并复用已有结论。如果已有 Agent 上下文仍然有价值，也可以继续使用，而不是重新建立上下文。
-
-跨任务沉淀的经验与契约可以另存于 `.orch-lite/memory/shared.json`，供后续任务读取复用。
+派发新任务前，Orch-lite 可以检查该 feature 的分支历史（`git log feature/<fid>`）并复用已有结论。如果已有 Agent 上下文仍然有价值，也可以继续使用，而不是重新建立上下文。
 
 </details>
 

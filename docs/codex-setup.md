@@ -126,4 +126,3 @@ The Desktop UI does not always display trusted plugin hooks, so the more reliabl
 
 ## Further reading
 
-- [SubagentStart hook design notes](codex-subagent-start.md) — the third bundled hook, with its full internal design document.
