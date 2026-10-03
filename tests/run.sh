@@ -367,7 +367,7 @@ assert "MUST output exactly one `[routing] ...` line as the first line of every 
 assert "Self-repair." in section, "self-repair clause missing"
 for state in ("[routing] chat → handle directly",
               "[routing] task → single dispatch",
-              "[routing] orchestration → enable index+worktrees"):
+              "[routing] orchestration → worktree per feature"):
     assert state in section, f"routing state missing: {state}"
 PY
 }

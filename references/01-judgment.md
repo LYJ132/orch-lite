@@ -44,12 +44,9 @@ The index provides only: task status + usable products. It is not for real-time 
 - Concurrent same-file edits cannot collide by construction: each executor writes only in its own write area (worktree, or — when solo — the working tree checked out on its feature branch), never on main
 
 ### 1.11 Isolation Is Gated on Observed Concurrency (Lazy)
-Isolate only when concurrency is real. At dispatch, the main agent reads the index's live-task set (any other child still `running`?):
-- **None running** → no concurrency → the child writes in the primary working tree on its `feature/<feature_id>` branch, created and checked out before its first write — NO worktree (zero isolation premium), but still never on `main`.
-- **One+ running** → concurrency is real → create a worktree for the newcomer so its writes cannot collide.
+One sentence: **dispatch into the primary tree (solo) only when you can confirm nothing else is running — no unreturned dispatch this session and a clean `git worktree list`; otherwise create a worktree.**
 
-Routing default (Step 0's decomposition check in SKILL.md Request Routing): independent work parallelizes; serial only on a NAMED dependency or a shared-file constraint; an awaiting-user-review gate is not a dependency. A parallel batch is itself concurrency, so this section's gate applies unchanged: the first-dispatched child takes the primary tree on its branch, every later child gets a worktree.
-This is a "blunt" gate: it cannot see *which file* another child is writing, so concurrent-but-disjoint tasks are still worktreed. That over-isolation is one cheap `git worktree add`; the alternative (a per-file occupancy table that lets us know exactly who holds which file) is precisely the `files`/`git` occupancy tracking we retired — not worth the lifecycle cost. Zero new mechanism.
+Misjudging costs one extra worktree, which the flow already pays for; the fail-safe default (worktree) isolates every concurrent worker by construction. Parallelism is the default across independent features — the first-dispatched child takes the primary tree on its branch, every later one gets a worktree.
 
 ### 1.12 Shared Resources Are Protected by Mechanisms, Not Memory
 - Shared-memory writes are serialized by a flock the CLI takes internally on `.orch-lite/memory.lock`; agents just call the CLI
