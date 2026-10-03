@@ -142,11 +142,46 @@ Within the same session, prefer resuming a returned agent (the dispatch result c
 
 ---
 
-## CLI Quick Reference
+## Worktree Model
+
+| Property | Description |
+|---|---|
+| Layout | `.worktrees/<feature_id>/` — one git worktree per feature; the child agent's only workplace when concurrency is real (invariant 2) |
+| Branch | `feature/<feature_id>` — one long-lived branch per feature; merge = integration, not closure; never auto-deleted |
+| feature_id | main-inferred, user-confirmed, reused across the feature's work; slug rule `^[a-z0-9][a-z0-9._-]*$` (branch + worktree name) |
+| Commit authorship | the child sets `GIT_AUTHOR_NAME=<feature_id>` (+ local email) so the branch history tells the feature's story |
+| Main-tree protection | primary tree = main only (integration merges); children never commit to main |
+| Invariant | at most ONE writable worktree per feature branch (git-enforced; a second create fails with `feature busy`) |
+
+**Create openings**: ① first work of a feature — `feature/<fid>` does not exist yet, created from `--base` (default `main`); ② later work — branch exists, the worktree attaches; ③ re-dispatch over an existing `.worktrees/<fid>/` — **idempotent reuse** (the real path is printed, nothing created).
+
+### Merge & conflict flow
+```
+All feature tasks complete, or user asks to sync
+    ↓
+worktree merge --feature-id [--into main]   (main agent, primary tree)
+    ↓
+built-in pre-check: git merge-tree
+    ├── clean → merges into main; feature/<feature_id> kept
+    └── conflicts → report files → user decides (abort by default / --no-commit for manual)
+```
+Integration conflicts are surfaced here and decided by the user — no agent-to-agent file-occupancy negotiation.
+
+---
+
+## CLI Quick Reference (`scripts/multi-agent`)
 
 CLI groups: `worktree` / `doctor` — requires **Python >= 3.9** for the CLI and both hooks (older interpreters print a one-line stderr message; hooks fail-open, the CLI exits non-zero); uv users may run via `uv run --python 3.12 <script>` (docs only, no dependency).
 
-Full parameters: `./scripts/multi-agent <group> --help` or [references/03-state.md](references/03-state.md).
+| Command | User | Purpose |
+|---|---|---|
+| `worktree create --feature-id <fid> [--base main]` | Main, T1 | create (or idempotently reuse) `.worktrees/<fid>/` on `feature/<fid>`; refuses only when the branch is checked out elsewhere (`feature busy`); writes no state |
+| `worktree list` | anyone | worktrees under `.worktrees/` grouped by feature branch, plus feature branches with no active worktree (kept, not deleted) |
+| `worktree remove --feature-id <fid> [--force]` | Main, T2 | remove the worktree (refuses if uncommitted unless `--force`); branch untouched |
+| `worktree merge --feature-id <fid> [--into main]` | Main | integrate the feature branch into main (git merge-tree pre-check) |
+| `doctor` | anyone (main, hooks) | hygiene scan: running version, dirty worktrees, stale worktrees whose feature branch is already merged (git worktree list + merged-branch state), feature_id-authored commits made directly on main (first-parent scan); always exits 0 (feeds session-init Health) |
+
+Full parameters: `./scripts/multi-agent <group> --help`.
 
 ---
 
@@ -154,11 +189,8 @@ Full parameters: `./scripts/multi-agent <group> --help` or [references/03-state.
 
 | File | When to consult |
 |---|---|
-| [01-judgment.md](references/01-judgment.md) | Judgment/heuristics cases — principles, hierarchy, isolation gate. Read before any judgment call |
-| [02-protocol.md](references/02-protocol.md) | Dispatch/schema lookup tables — package format, message types, standard flow pointer, parallel/reuse |
-| [03-state.md](references/03-state.md) | Worktree model + CLI parameters — the full `scripts/multi-agent` reference |
-
-Each reference is a view, not authority: SKILL.md is canonical; on any conflict SKILL.md wins.
+| [02-protocol.md](references/02-protocol.md) | Communication views — topology, message types, path selection; dispatch format pointer |
+| [03-state.md](references/03-state.md) | State view — root structure, worktree model mechanics, merge flow, gitignore |
 
 ---
 

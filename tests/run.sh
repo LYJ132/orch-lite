@@ -598,125 +598,20 @@ case_doctor() {
   printf '%s\n' "$out"
   grep -q "main-violation" <<< "$out" && { echo "(b) merge-integrated task commit must NOT surface as main-violation"; return 1; }
   grep -q "doctor: all clear" <<< "$out" || { echo "(b) expected 'doctor: all clear' in the merged-clean repo"; return 1; }
-}
+  grep -q "version " <<< "$out" || { echo "(b) expected the running version line"; return 1; }
+  grep -q "Merged feature branches" <<< "$out" || { echo "(b) expected the merged-branch state"; return 1; }
 
-# --- doctor check (4) in a scratch repo: HEAD tracked sources vs an install ---
-
-case_doctor_drift() {
-  # Dual-install drift: HEAD's *tracked* sources (never the working tree) are
-  # compared by blob hash against --compare-dir. In sync or copy absent -> no
-  # finding at all; altered / added / removed files -> one `drift:` line each.
-  # Sandboxes are mktemp -d, independent of this repo and of ~/.agents.
-  local root dir copy out
-  root="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$root")
-  dir="$root/repo"; copy="$root/copy"
-  mkdir -p "$dir"/{hooks,references,scripts,tests} "$copy" "$dir/.orch-lite" || return 1
-  printf '# skill\n' > "$dir/SKILL.md"
-  printf '.orch-lite/\n.worktrees/\n' > "$dir/.gitignore"
-  printf 'print("hook")\n' > "$dir/hooks/session-init.py"
-  printf '# state\n' > "$dir/references/03-state.md"
-  cp "$SKILL_DIR/scripts/multi-agent" "$dir/scripts/multi-agent" || return 1   # the gate wants a skill-shaped HEAD
-  printf '# tests\n' > "$dir/tests/scenarios.md"
-  printf 'not a source root\n' > "$dir/README.md"                               # must never be compared
-  git -C "$dir" init -q -b main || return 1
-  git -C "$dir" add -A || return 1
-  git -C "$dir" -c user.name=t -c user.email=t@l commit -qm base || return 1
-  printf '{"tasks": {}}' > "$dir/.orch-lite/index.json" || return 1
-  cp -r "$dir/hooks" "$dir/references" "$dir/scripts" "$dir/tests" "$dir/SKILL.md" "$dir/.gitignore" "$copy/" || return 1
-
-  # (a) identical copy -> no drift finding
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$copy")" || { echo "doctor exited non-zero"; return 1; }
-  [ "$out" = "doctor: all clear" ] || { echo "(a) in-sync copy reported: $out"; return 1; }
-
-  # (b) absent copy -> lenient: same output, still exit 0
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$root/no-such-install")" || { echo "doctor exited non-zero"; return 1; }
-  [ "$out" = "doctor: all clear" ] || { echo "(b) absent copy reported: $out"; return 1; }
-
-  # (c) working-tree dirt is not drift: HEAD is the comparison side
-  printf 'uncommitted edit\n' >> "$dir/SKILL.md" || return 1
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$copy")" || { echo "doctor exited non-zero"; return 1; }
-  [ "$out" = "doctor: all clear" ] || { echo "(c) working-tree dirt reported as drift: $out"; return 1; }
-  git -C "$dir" checkout -q -- SKILL.md || return 1
-
-  # (d) one altered + one added + one removed in the copy -> exactly those 3
-  printf '# edited on disk\n' > "$copy/SKILL.md" || return 1
-  printf 'extra\n' > "$copy/tests/added-in-copy.md" || return 1
-  rm "$copy/references/03-state.md" || return 1
-  mkdir -p "$copy/scripts/__pycache__" && printf 'junk\n' > "$copy/scripts/__pycache__/multi-agent.pyc" || return 1
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$copy")" || { echo "doctor exited non-zero"; return 1; }
+  # (c) stale: a worktree whose feature branch is already merged into main
+  # (git-native stale check: git worktree list + merged-branch state)
+  dir="$(wt_repo)" || return 1
+  wt_cli "$dir" worktree create --feature-id login-fix >/dev/null || return 1
+  printf 'work\n' > "$dir/.worktrees/login-fix/work.txt"
+  git -C "$dir/.worktrees/login-fix" add work.txt || return 1
+  git -C "$dir/.worktrees/login-fix" -c user.name=login-fix -c user.email=f@l commit -q -m work || return 1
+  wt_cli "$dir" worktree merge --feature-id login-fix >/dev/null || return 1
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
-  [ "$(grep -c '^drift: ' <<< "$out")" -eq 3 ] || { echo "(d) expected exactly 3 drift lines (the planted .pyc must not count)"; return 1; }
-  grep -q '^drift: SKILL.md (HEAD [0-9a-f]* != copy [0-9a-f]*)$' <<< "$out" || { echo "(d) altered file not reported"; return 1; }
-  grep -q '^drift: references/03-state.md (tracked in HEAD, missing in copy)$' <<< "$out" || { echo "(d) removed file not reported"; return 1; }
-  grep -q '^drift: tests/added-in-copy.md (present in copy, not tracked in HEAD)$' <<< "$out" || { echo "(d) added file not reported"; return 1; }
-
-  # (e) a repo that is not the skill source stays silent (no false storm of
-  # "extra in copy" lines for every installed file)
-  rm "$dir/scripts/multi-agent" && git -C "$dir" add -A >/dev/null || return 1
-  git -C "$dir" -c user.name=t -c user.email=t@l commit -qm "stop tracking scripts/multi-agent" || return 1
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$copy")" || { echo "doctor exited non-zero"; return 1; }
-  [ "$out" = "doctor: all clear" ] || { echo "(e) non-skill repo reported: $out"; return 1; }
-
-  # (f)-(h) cross-layout: a plugin-layout HEAD (SKILL.md at
-  # skills/orch-lite/SKILL.md, the Phase 1 repo shape) vs a flat copy must
-  # compare by the SKILL.md ROLE — never a false "missing" storm for every
-  # path; a plugin-form copy matches the same way.
-  local prepo pcopy2
-  prepo="$root/prepo"; pcopy2="$root/pcopy"
-  mkdir -p "$prepo"/{hooks,references,scripts,tests,skills/orch-lite} "$prepo/.orch-lite" "$pcopy2" || return 1
-  printf '# skill\n' > "$prepo/skills/orch-lite/SKILL.md"
-  printf '.orch-lite/\n.worktrees/\n' > "$prepo/.gitignore"
-  printf 'print("hook")\n' > "$prepo/hooks/session-init.py"
-  printf '# state\n' > "$prepo/references/03-state.md"
-  cp "$SKILL_DIR/scripts/multi-agent" "$prepo/scripts/multi-agent" || return 1
-  printf '# tests\n' > "$prepo/tests/scenarios.md"
-  git -C "$prepo" init -q -b main || return 1
-  git -C "$prepo" add -A || return 1
-  git -C "$prepo" -c user.name=t -c user.email=t@l commit -qm base || return 1
-  printf '{"tasks": {}}' > "$prepo/.orch-lite/index.json" || return 1
-  cp -r "$prepo/hooks" "$prepo/references" "$prepo/scripts" "$prepo/tests" "$prepo/.gitignore" "$pcopy2/" || return 1
-  cp "$prepo/skills/orch-lite/SKILL.md" "$pcopy2/SKILL.md" || return 1
-
-  # (f) plugin HEAD vs in-sync flat copy -> role-matched, no drift at all
-  out="$(cd "$prepo" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$pcopy2")" || { echo "doctor exited non-zero"; return 1; }
-  [ "$out" = "doctor: all clear" ] || { echo "(f) plugin HEAD vs flat copy reported: $out"; return 1; }
-
-  # (g) altered flat-copy SKILL.md -> exactly 1 drift line, named by the role path
-  printf '# edited on disk\n' > "$pcopy2/SKILL.md" || return 1
-  out="$(cd "$prepo" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$pcopy2")" || { echo "doctor exited non-zero"; return 1; }
-  [ "$(grep -c '^drift: ' <<< "$out")" -eq 1 ] || { echo "(g) expected exactly 1 drift line: $out"; return 1; }
-  grep -q '^drift: SKILL.md (HEAD [0-9a-f]* != copy [0-9a-f]*)$' <<< "$out" || { echo "(g) role-named SKILL.md drift line missing: $out"; return 1; }
-
-  # (h) plugin-form copy (SKILL.md under skills/orch-lite/) -> all clear again
-  rm "$pcopy2/SKILL.md" || return 1
-  mkdir -p "$pcopy2/skills/orch-lite" || return 1
-  cp "$prepo/skills/orch-lite/SKILL.md" "$pcopy2/skills/orch-lite/SKILL.md" || return 1
-  out="$(cd "$prepo" && python3 "$SKILL_DIR/scripts/multi-agent" doctor --compare-dir "$pcopy2")" || { echo "doctor exited non-zero"; return 1; }
-  [ "$out" = "doctor: all clear" ] || { echo "(h) plugin HEAD vs plugin copy reported: $out"; return 1; }
-}
-
-# --- Python >= 3.9 parseability (the version guards' advertised minimum) ---
-
-case_py39_parse() {
-  # Every *.py (both hooks included) plus the extensionless scripts/multi-agent
-  # must parse under the Python 3.9 grammar — older interpreters must hit the
-  # hooks' one-line stderr guard / CLI's non-zero guard, never a SyntaxError
-  # traceback. feature_version checks syntax only, which is exactly the guard
-  # contract: the guard lines themselves run before any 3.10+ API use.
-  python3 - <<'PY'
-import ast, pathlib, sys
-paths = sorted(set(pathlib.Path(".").glob("*/*.py")))
-paths.append(pathlib.Path("scripts/multi-agent"))
-names = {p.name for p in paths}
-assert {"dispatch-validate.py", "session-init.py"} <= names, f"hooks missing from collection: {names}"
-for p in paths:
-    try:
-        ast.parse(p.read_text(), filename=str(p), feature_version=(3, 9))
-    except SyntaxError as e:
-        sys.exit(f"{p}: not Python-3.9 parseable: {e}")
-print(f"{len(paths)} files parse under the Python 3.9 grammar")
-PY
+  grep -q "stale: login-fix (feature/login-fix is merged into main" <<< "$out" || { echo "(c) expected stale finding for the merged worktree"; return 1; }
 }
 
 # --- worktree: create (new / idempotent reuse / busy) + list + remove + merge ---
@@ -810,6 +705,29 @@ case_wt_merge() {
   [ "$(git -C "$d" show main:work.txt 2>/dev/null)" = "work" ] || { echo "merge content missing on main"; return 1; }
 }
 
+# --- Python >= 3.9 parseability (the version guards' advertised minimum) ---
+
+case_py39_parse() {
+  # Every *.py (both hooks included) plus the extensionless scripts/multi-agent
+  # must parse under the Python 3.9 grammar — older interpreters must hit the
+  # hooks' one-line stderr guard / CLI's non-zero guard, never a SyntaxError
+  # traceback. feature_version checks syntax only, which is exactly the guard
+  # contract: the guard lines themselves run before any 3.10+ API use.
+  python3 - <<'PY'
+import ast, pathlib, sys
+paths = sorted(set(pathlib.Path(".").glob("*/*.py")))
+paths.append(pathlib.Path("scripts/multi-agent"))
+names = {p.name for p in paths}
+assert {"dispatch-validate.py", "session-init.py"} <= names, f"hooks missing from collection: {names}"
+for p in paths:
+    try:
+        ast.parse(p.read_text(), filename=str(p), feature_version=(3, 9))
+    except SyntaxError as e:
+        sys.exit(f"{p}: not Python-3.9 parseable: {e}")
+print(f"{len(paths)} files parse under the Python 3.9 grammar")
+PY
+}
+
 # --- run everything ---
 
 run_case "FM.1   SKILL.md YAML frontmatter parses"        case_fm_parse
@@ -846,7 +764,6 @@ run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skill
 run_case "3.7    session-init unwritable cwd -> fallback, exit 0" case_si_unwritable_cwd
 run_case "3.8    CLI unwritable cwd: doctor human line"   case_cli_unwritable_cwd
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
-run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate/cross-layout" case_doctor_drift
 run_case "PY39  every python file parses as 3.9 (hooks + CLI)"  case_py39_parse
 run_case "WT.1   worktree create: new worktree + branch from main" case_wt_create_new
 run_case "WT.2   worktree create: idempotent reuse (reused + real path + note)" case_wt_create_idempotent

@@ -173,3 +173,82 @@ change, ask which audience it targets BEFORE writing.
 
 **Resolution**: 1.2.1 (ad031cf) 移除多余键并守住 schema；分区映射移入
 tests/hooks.md。
+
+---
+
+## Design rationale (migrated 2026-10-03 from references/01-judgment.md §1-6; 1.3.0 wording)
+
+> Migrated as part of the 1.3.0 references consolidation: rationale lives in
+> DEVLOG, rules live in SKILL.md. Text below is adapted to the 1.3.0
+> zero-state design (feature_id keying, no index.json/memory.json); the
+> original wording is in git history.
+
+### 1.1 The User Is Never Blocked
+A running task ≠ the user must wait. After dispatching, the main agent ends its turn; the user may submit new tasks / check status / ask questions at any time.
+
+### 1.2 The Main Agent Coordinates, It Does Not Keep Waiting
+- Receives requests → analyzes type & split strategy → dispatches child executors
+- Creates the worktree scope at assign time (T1, concurrent only) → coordinates → handles HELP_REQUEST → receives reports → reports to the user
+- The main agent does **not**: wait long for a child, do concrete work, keep agents alive between dispatches.
+
+### 1.3 Recover System State, Not Full Context
+On any event, read only the minimal state relevant to it (unreturned dispatches + `git worktree list` + the feature branch history), process, end the turn. Do not reload past conversations / all tasks / full agent context. The same minimalism governs file reads, gated by footprint per Step 0 (SKILL.md): narrow reads the main session takes itself; wide sweeps go to one read-only explore child — it writes nothing, so no worktree, branch, or commit.
+
+### 1.4 Agents Are Limited to Two Layers
+Level 0 main / Level 1 child executor. A child never derives further agents (executor rule 1). Level-2 workers were retired (see below) — on zcode the Agent tool is unavailable inside subagents, and the flat shape keeps the protocol portable.
+
+### 1.5 Homogeneous Tasks Split by the Main Agent, Not Downward
+Where a platform supports nesting, same-type work may shard — but the portable rule is: the MAIN agent dispatches homogeneous shards directly (flat parallelism), one agent per feature. Same type splits, different type coordinates laterally (HELP_REQUEST to main).
+
+### 1.6 Heterogeneous Tasks Coordinate Laterally
+Different-function need → check existing products (git / the feature branch); yes → reference directly, no → HELP_REQUEST to the main agent, which coordinates/dispatches.
+
+### 1.7 Report Completed Tasks in Order
+Independent: whoever finishes first is reported first. Dependent: judge per dependency whether it can be reported independently.
+
+### 1.8 Direct Communication First
+Normal: child reports directly to the main session. There is no fallback channel: task notifications and the platform's message delivery make one unnecessary — re-add one only if a real failure occurs.
+
+### 1.9 Git Carries Task State, Not Live Chit-Chat
+The feature branch + `git worktree list` provide only: what exists, what is running, what was produced. Not for real-time messaging / full history narration.
+
+### 1.10 Isolation Is by Construction — But Gated by Concurrency
+- When a worktree is used, it gives isolation by construction: `.worktrees/<feature_id>/`, created at T1, removed at T2; one long-lived branch per feature
+- Whether a worktree is used at all is decided lazily, per §1.11
+- Concurrent same-file edits cannot collide by construction: each executor writes only in its own write area, never on main
+
+### 1.11 Isolation Is Gated on Observed Concurrency (Lazy) — the one-sentence rule
+**Dispatch into the primary tree (solo) only when you can confirm nothing else is running — no unreturned dispatch this session and a clean `git worktree list`; otherwise create a worktree.** Misjudging costs one extra worktree, which the flow already pays for. A "blunt" gate it cannot see *which file* another child is writing, so concurrent-but-disjoint tasks are still worktreed — that over-isolation is one cheap `git worktree add`; the alternative (per-file occupancy tracking) is precisely the mechanism we retired. Zero new mechanism.
+
+### 1.12 Shared Resources Are Protected by Construction
+No shared mutable state exists to lock: git owns all facts, worktrees own all writes. (1.2.x serialized shared-memory writes with a CLI-internal flock — the file is gone.)
+
+### 1.13 Experiences Are Cast Directly Into Rules
+No separate SOP layer. A recurring lesson becomes a rule in SKILL.md (or a DEVLOG contract while developing); one-off lessons stay experiences in DEVLOG. **Unsure → ask the user.**
+
+### 1.14 Do Not Add Complexity for Problems That Have Not Occurred
+Build a minimal skeleton → run → discover real problems → analyze → design → user confirms → write a rule. Do not pre-suppose distributed scheduling, unlimited autonomy, complex state machines, or a full exception framework. (Codified as the 1.3.0 plan §0 decision filter.)
+
+### 1.15 Errors: Minimize Post-Hoc Rework, Do Not Over-Confirm Up Front
+Errors are low-probability and never fully preventable, so the response is not to repeatedly ask the user / thin-slice tasks for stepwise confirmation. Keep the cost of any single mistake minimal — the incremental-commit discipline (SKILL.md invariant 4) carries this.
+
+### Level-2 workers (retired — platform constraint, grandchild probe 2026-09-11)
+Worker spawning is conditional on platform support for nested agent spawning. On zcode the Agent tool is unavailable inside subagents (`Tool not found: Agent`), so level-2 workers cannot exist here; the main agent dispatches homogeneous shards directly (flat parallelism). The 1.3.0 protocol assumes the flat two-layer model everywhere.
+
+---
+
+## dsh provenance chain (1.3.0 back-ports)
+
+The mechanisms below were validated in `dsh-orch-lite` (the Node
+implementation of the same protocol,
+`/mnt/d/Documents/deepseek-harness/default-workspace/dsh-orch-lite`) and
+back-ported into this plugin in 1.3.0:
+
+| Mechanism | dsh origin |
+|---|---|
+| Four-line resume template (SUPERSEDES / STILL VALID / ACCEPTANCE / READ FIRST) | `skills/orch-lite/SKILL.md:94-97` (dsh tree) |
+| DONE/STUCK report states | dsh executor report contract |
+| Idempotent `worktree create` (reuse + note) | dsh `worktree create` returns `reused` + note |
+| Gate contract single-sourcing | dsh: the enforcer owns the constants; the notice renders from them |
+| Lazy isolation (worktree only on observed concurrency) | dsh prose gate; dsh can half-enforce it because its host counts live workers — zcode carries it in prose |
+| Parallelism default (decomposition check: unsure → parallel) | dsh `lib/index.js:96` |

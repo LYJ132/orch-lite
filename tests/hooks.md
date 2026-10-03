@@ -129,8 +129,9 @@ is deleted).
    absence*: non-zero exit, empty output, or argparse "invalid choice" /
    "unrecognized" text → the section is skipped silently (the hook stays
    usable against CLI copies that predate doctor). When doctor exists, its
-   findings (`dirty:` / `main-violation:` lines, or `doctor: all clear`)
-   appear verbatim.
+   output (the running version, `dirty:` / `stale:` / `main-violation:`
+   findings, the merged-branch state, or `doctor: all clear`) appears
+   verbatim.
 
 The three contract sections come from SKILL.md only (single source of truth —
 the hook holds no second copy; the extraction table in the hook just names
