@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # tests/run.sh — executable counterpart of the manual matrix in tests/hooks.md.
 #
-# Self-contained: no network, no writes outside mktemp -d sandboxes (negative
-# paths never touch the real .orch-lite/ runtime state; running session-init
-# inside the repo is idempotent by design — init creates-if-missing, list and
-# doctor are pure reads).
+# Self-contained: no network, no writes outside mktemp -d sandboxes (1.3.0 has
+# no state file at all; session-init writes nothing and doctor is a pure read,
+# so running session-init inside the repo is side-effect free).
 #
 # Git discovery is ceiling-restricted so the sandboxes are HERMETIC: a repo at
 # an ancestor of $TMPDIR (e.g. a stray /tmp/.git left by an init run whose cwd
@@ -174,7 +173,8 @@ d = json.load(open(sys.argv[1]))
 extra = set(d) - {"description", "hooks"}
 assert not extra, f"extra top-level keys (Codex strict schema): {sorted(extra)}"
 assert d.get("hooks"), "manifest has no hooks object"
-for event in ("SessionStart", "SubagentStart", "PreToolUse"):
+assert "SubagentStart" not in d["hooks"], "SubagentStart was deleted in 1.3.0 and must not return"
+for event in ("SessionStart", "PreToolUse"):
     assert event in d["hooks"], f"event group missing from manifest: {event}"
 PY
 }
@@ -383,41 +383,6 @@ case_1_audit_shapes() {
 
 # --- Hook 3: session-init (matrix 3.1–3.6) + fail-soft audit ---
 
-case_3_1() {
-  local d ctx
-  d="$(fresh_copy)" || return 1
-  ( cd "$d" && python3 hooks/session-init.py >o.json ) || return 1
-  python3 - "$d" <<'PY'
-import json, sys, pathlib
-d = pathlib.Path(sys.argv[1])
-ma = d / ".orch-lite"
-for p in ("index.json", "memory.json"):
-    if not (ma / p).is_file():
-        sys.exit(f"missing {p}")
-if not (d / ".git").exists():
-    sys.exit("git not bootstrapped")
-mem = json.loads((ma / "memory.json").read_text())
-for key in ("common_knowledge", "experiences", "task_patterns", "contracts"):
-    assert key in mem, f"memory lacks {key}"
-ctx = json.loads((d / "o.json").read_text())["additionalContext"]
-assert "Index is empty" in ctx, "empty index line missing"
-assert "doctor: all clear" in ctx, "health line missing"
-PY
-}
-
-case_3_2() {
-  local d
-  d="$(fresh_copy)" || return 1
-  ( cd "$d" && python3 scripts/multi-agent index create --task-id probe-20260912-99 --role impl ) >/dev/null || return 1
-  ( cd "$d" && python3 hooks/session-init.py >o.json ) || return 1
-  python3 - "$d" <<'PY'
-import json, sys, pathlib
-ctx = json.loads(pathlib.Path(sys.argv[1], "o.json").read_text())["additionalContext"]
-assert "probe-20260912-99" in ctx, "populated index not injected"
-assert "Request Routing" in ctx
-PY
-}
-
 # Drop one '## <heading>' line from the copy's SKILL.md.
 strip_heading() {  # $1=dir $2=heading prefix
   python3 - "$1" "$2" <<'PY'
@@ -530,11 +495,10 @@ case_si_audit_no_cli() {
   python3 - "$d" <<'PY'
 import json, sys, pathlib
 ctx = json.loads(pathlib.Path(sys.argv[1], "o.json").read_text())["additionalContext"]
-# Interpreter starts but the script file is gone: python's "can't open file"
-# text (exit 2) or the hook's own "(hook error" — either must degrade into the
-# bootstrap line, never abort the payload.
-assert "Bootstrap" in ctx and ("can't open file" in ctx or "(hook error" in ctx), \
-    "CLI-absent path should degrade into the bootstrap line"
+# Interpreter starts but the script file is gone: the doctor probe must
+# degrade into a skipped Health line, never abort the payload.
+assert ("Health (skipped" in ctx and ("can't open file" in ctx or "(hook error" in ctx)), \
+    "CLI-absent path should degrade into a skipped Health line"
 assert "Request Routing" in ctx
 PY
 }
@@ -579,10 +543,10 @@ case_si_unwritable_cwd() {
   python3 - "$out" <<'PY'
 import json, sys
 ctx = json.loads(sys.argv[1])["additionalContext"]
-assert "--- Bootstrap (skipped: cannot create " in ctx, \
-    f"bootstrap fallback header missing; ctx head: {ctx[:200]!r}"
-assert "--- Agent Index (skipped: cannot create " in ctx, "index fallback header missing"
-assert "Permission denied" in ctx, "permission reason missing from the fallback lines"
+assert "[orch-lite]" in ctx
+# No state file since 1.3.0: the hook claims no bootstrap and no index.
+assert "Bootstrap" not in ctx and "Agent Index" not in ctx, \
+    "session-init must not bootstrap or list an index any more"
 for banned in ("Traceback", 'File "', "PermissionError"):
     assert banned not in ctx, f"traceback word leaked into the payload: {banned!r}"
 assert "Request Routing" in ctx, "contract sections must still inject"
@@ -593,20 +557,11 @@ case_cli_unwritable_cwd() {
   [ "$(id -u)" -eq 0 ] && return 0
   local d out rc=0
   d="$(unwritable_dir)" || return 1
-  # doctor: one human line, exit 0 (the quality bar the others must match)
+  # doctor: one human line, exit 0 (the quality bar every command must match)
   out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)"; rc=$?
-  [ "$rc" -eq 0 ] || { chmod 755 "$d"; printf 'doctor must exit 0, got %s: %s\n' "$rc" "$out"; return 1; }
-  grep -q "(doctor: not a repo)" <<< "$out" || { chmod 755 "$d"; printf 'doctor human line missing: %s\n' "$out"; return 1; }
-  # index list (observer): same one line, exit 0
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index list)"; rc=$?
-  [ "$rc" -eq 0 ] || { chmod 755 "$d"; printf 'index list must exit 0, got %s: %s\n' "$rc" "$out"; return 1; }
-  grep -q "bootstrap skipped: cannot create .*: Permission denied" <<< "$out" || { chmod 755 "$d"; printf 'index list fail-soft line missing: %s\n' "$out"; return 1; }
-  # explicit init: same line, clean non-zero; no traceback on any channel
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" init 2>&1)"; rc=$?
   chmod 755 "$d"
-  [ "$rc" -ne 0 ] || { printf 'explicit init must exit non-zero, got 0: %s\n' "$out"; return 1; }
-  grep -q "bootstrap skipped: cannot create .*: Permission denied" <<< "$out" || { printf 'init fail-soft line missing: %s\n' "$out"; return 1; }
-  if grep -q "Traceback" <<< "$out"; then printf 'traceback leaked:\n%s\n' "$out"; return 1; fi
+  [ "$rc" -eq 0 ] || { printf 'doctor must exit 0, got %s: %s\n' "$rc" "$out"; return 1; }
+  grep -q "(doctor: not a repo)" <<< "$out" || { printf 'doctor human line missing: %s\n' "$out"; return 1; }
   [ -z "$(ls -A "$d")" ] || { printf 'cwd must stay empty, found: %s\n' "$(ls -A "$d")"; return 1; }
 }
 
@@ -625,7 +580,6 @@ case_doctor() {
   TMP_DIRS+=("$dir")
   git -C "$dir" init -q -b main || return 1
   git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
-  mkdir -p "$dir/.orch-lite" && printf '{"tasks": {}}' > "$dir/.orch-lite/index.json" || return 1
   git -C "$dir" -c user.name=ops-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work committed on main" || return 1
   out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
@@ -636,7 +590,6 @@ case_doctor() {
   TMP_DIRS+=("$dir")
   git -C "$dir" init -q -b main || return 1
   git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
-  mkdir -p "$dir/.orch-lite" && printf '{"tasks": {}}' > "$dir/.orch-lite/index.json" || return 1
   git -C "$dir" checkout -q -b feature/demo || return 1
   git -C "$dir" -c user.name=impl-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work on feature branch" || return 1
   git -C "$dir" checkout -q main || return 1
@@ -743,84 +696,6 @@ case_doctor_drift() {
   [ "$out" = "doctor: all clear" ] || { echo "(h) plugin HEAD vs plugin copy reported: $out"; return 1; }
 }
 
-# --- memory_set dotted-path list traversal (regression: traceback on lists) ---
-
-case_mem_set_list() {
-  # memory set must traverse lists by integer index (contracts.0.rule),
-  # and any type mismatch (non-int segment at a list, out-of-range index,
-  # descending into a scalar) must be a CLEAN usage error — one error line,
-  # exit 1, never a traceback (the pre-fix CLI crashed with
-  # AttributeError: 'list' object has no attribute 'setdefault').
-  local d out
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" init ) >/dev/null || return 1
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory append --array contracts --entry '{"id": "c1", "rule": "old"}' ) >/dev/null || return 1
-
-  # (a) traverse into a list element and set a key inside it
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory set --key contracts.0.rule --value '"new"' ) >/dev/null || return 1
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory get --key contracts.0.rule)" || return 1
-  [ "$out" = "new" ] || { printf 'expected contracts.0.rule=new, got %s\n' "$out"; return 1; }
-
-  # (b) int segment on the final part replaces the list element itself
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory set --key contracts.0 --value '{"id": "c1", "rule": "v2"}' ) >/dev/null || return 1
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory get --key contracts.0.id)" || return 1
-  [ "$out" = "c1" ] || { printf 'expected contracts.0.id=c1 after index set, got %s\n' "$out"; return 1; }
-
-  # (c) non-integer segment at a list -> clean usage error, exit 1
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory set --key contracts.bad.rule --value '1' 2>&1)" && { printf 'non-int list segment should fail\n'; return 1; }
-  grep -q "Traceback" <<< "$out" && { printf 'traceback leaked:\n%s\n' "$out"; return 1; }
-  grep -q "addresses a list" <<< "$out" || { printf 'expected clean usage error, got:\n%s\n' "$out"; return 1; }
-
-  # (d) out-of-range index -> clean usage error, exit 1
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" memory set --key contracts.9.x --value '1' 2>&1)" && { printf 'out-of-range index should fail\n'; return 1; }
-  grep -q "Traceback" <<< "$out" && { printf 'traceback leaked:\n%s\n' "$out"; return 1; }
-  grep -q "out of range" <<< "$out" || { printf 'expected out-of-range error, got:\n%s\n' "$out"; return 1; }
-}
-
-case_index_agent_id() {
-  # --agent-id on index create/update is plain per-task metadata: stored,
-  # surfaced by index list (extra column) and index show (JSON dump), and
-  # influencing nothing else. Enables the continuation/reuse check (SKILL.md
-  # NEW_TASK step 2.5) to find a completed task's resumable agent.
-  local d out
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" init ) >/dev/null || return 1
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-aid-01 --role impl --feature-id fid --agent-id agent_set_at_create ) >/dev/null || return 1
-
-  # list shows the agent column
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index list)" || return 1
-  grep -q "impl-aid-01 | impl | fid | assigned | agent_set_at_create" <<< "$out" || { printf 'list missing agent column:\n%s\n' "$out"; return 1; }
-
-  # update overwrites the agent id
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index update --task-id impl-aid-01 --status running --agent-id agent_after_update ) >/dev/null || return 1
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-aid-01)" || return 1
-  grep -q '"agent_id": "agent_after_update"' <<< "$out" || { printf 'show missing updated agent_id:\n%s\n' "$out"; return 1; }
-}
-
-case_index_agent_binding() {
-  # The agents.json layer is REMOVED: index create/update carry --agent-id
-  # (plain metadata) only; entries never bind an agents.json registry id.
-  local d out
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" init ) >/dev/null || return 1
-
-  # --agent-id still recorded at create and update (plain metadata)
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-01 --role impl --feature-id fid --agent-id agent_at_create ) >/dev/null || return 1
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-01)" || return 1
-  grep -q '"agent_id": "agent_at_create"' <<< "$out" || { printf 'show missing agent_id:\n%s\n' "$out"; return 1; }
-  grep -q '"agent"' <<< "$out" && { printf 'registry agent field must be gone:\n%s\n' "$out"; return 1; }
-
-  # the agents.json validation is gone: any id (even unregistered) is accepted
-  # without a warning and lands as plain agent_id metadata
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index create --task-id impl-bind-02 --role impl --agent-id ghost 2>&1)" || { printf '%s\n' "unregistered id must not fail create"; return 1; }
-  grep -q "Warning: cannot validate" <<< "$out" && { printf '%s\n' "registry validation must be gone"; return 1; }
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" index show --task-id impl-bind-02)" || return 1
-  grep -q '"agent_id": "ghost"' <<< "$out" || { printf '%s\n' "agent_id metadata missing"; return 1; }
-}
-
 # --- Python >= 3.9 parseability (the version guards' advertised minimum) ---
 
 case_py39_parse() {
@@ -844,115 +719,95 @@ print(f"{len(paths)} files parse under the Python 3.9 grammar")
 PY
 }
 
-# --- Hook 4: subagent-start (Codex SubagentStart event, rev2 design) ---
-# Codex-only event (ZCode silently ignores it). Output is a stdout-JSON
-# contract: allow -> hookSpecificOutput.hookEventName=SubagentStart with
-# additionalContext; deny -> continue:false + stopReason; any internal error
-# -> silent zero-output fail-open. Policy lives at <cwd>/.orch-lite/
-# hook-policy.json (runtime-only, NOT shipped); missing/broken = zero rules.
-# The sandbox mktemp dirs are non-repos (GIT_CEILING_DIRECTORIES above), which
-# 4.2 exploits directly. HOME is pointed at a temp dir so the audit mirror
-# (~/.orch-lite/hook-observe/subagent-start.log) never touches the real home.
+# --- worktree: create (new / idempotent reuse / busy) + list + remove + merge ---
+# 1.3.0's load-bearing wall: .worktrees/<feature_id>/ on branch feature/<feature_id>,
+# create is IDEMPOTENT (dsh-validated), and the CLI is pure git (no state file).
 
-ss_home_dir() {  # echo a temp HOME dir (registered for cleanup)
+wt_repo() {  # echo a sandbox git repo with one baseline commit on main
   local d
   d="$(mktemp -d)" || return 1
   TMP_DIRS+=("$d")
+  git -C "$d" init -q -b main || return 1
+  git -C "$d" -c user.name=t -c user.email=t@l commit -q --allow-empty -m base || return 1
   printf '%s\n' "$d"
 }
-SS_HOME="$(ss_home_dir)"
 
-ss_run() {  # $1=stdin text — run the SubagentStart hook, capture stdout
-  SS_STDOUT="$(printf '%s' "$1" | HOME="$SS_HOME" python3 hooks/subagent-start.py)"
-  SS_RC=$?
+wt_cli() {  # $1=repo dir, rest: CLI args — run the CLI with the repo as cwd
+  local d="$1"; shift
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" "$@" )
 }
 
-case_4_1() {  # no policy file -> allow + handbook injection, exact JSON shape
-  local d
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  ss_run "{\"cwd\": \"$d\", \"agent_id\": \"a1\", \"agent_type\": \"impl\", \"model\": \"m\", \"session_id\": \"s1\", \"turn_id\": \"t1\"}"
-  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
-  python3 - "$SS_STDOUT" "$d" <<'PY'
-import json, sys, pathlib
-d = json.loads(sys.argv[1])
-assert d["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
-assert "skills/orch-lite-executor/SKILL.md" in d["hookSpecificOutput"]["additionalContext"]
-log = pathlib.Path(sys.argv[2], ".orch-lite", "subagent-start.log")
-rec = json.loads(log.read_text().splitlines()[-1])
-assert rec["decision"] == "allow" and rec["reason"] is None and rec["v"] == 1
-assert rec["agent_id"] == "a1" and rec["turn_id"] == "t1"
-PY
+case_wt_create_new() {
+  local d out
+  d="$(wt_repo)" || return 1
+  out="$(wt_cli "$d" worktree create --feature-id login-fix)" || { echo "create exited non-zero: $out"; return 1; }
+  grep -q "Worktree created: $d/.worktrees/login-fix" <<< "$out" || { echo "created line missing: $out"; return 1; }
+  grep -q "created branch feature/login-fix from main" <<< "$out" || { echo "branch line missing: $out"; return 1; }
+  [ -d "$d/.worktrees/login-fix" ] || { echo "worktree dir missing"; return 1; }
+  git -C "$d" rev-parse -q --verify refs/heads/feature/login-fix >/dev/null || { echo "branch missing"; return 1; }
 }
 
-case_4_2() {  # require_git_repo + non-repo cwd -> deny {continue:false}
-  local d
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  mkdir -p "$d/.orch-lite"
-  printf '{"v":1,"subagent_start":{"require_git_repo":true}}' > "$d/.orch-lite/hook-policy.json"
-  ss_run "{\"cwd\": \"$d\"}"
-  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
-  python3 - "$SS_STDOUT" <<'PY'
-import json, sys
-d = json.loads(sys.argv[1])
-assert d["continue"] is False and "require_git_repo" in d["stopReason"]
-assert d["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
-assert d["hookSpecificOutput"].get("additionalContext") is None
-PY
+case_wt_create_idempotent() {
+  # the load-bearing case: an existing .worktrees/<fid> is REUSED, its real
+  # path printed with a `reused:` line, nothing created, exit 0
+  local d out
+  d="$(wt_repo)" || return 1
+  wt_cli "$d" worktree create --feature-id login-fix >/dev/null || return 1
+  out="$(wt_cli "$d" worktree create --feature-id login-fix)" || { echo "reuse must exit 0: $out"; return 1; }
+  grep -q "^reused: $d/.worktrees/login-fix" <<< "$out" || { echo "reused line missing: $out"; return 1; }
+  grep -q "nothing created" <<< "$out" || { echo "reuse note missing: $out"; return 1; }
+  # one worktree only, still registered
+  [ "$(git -C "$d" worktree list --porcelain | grep -c '^worktree ')" -eq 2 ] || { echo "worktree count != 2 (main + feature)"; return 1; }
 }
 
-case_4_3() {  # corrupt stdin -> silent zero-output, exit 0
-  ss_run 'not json {{{ %%% <<<>>>'
-  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
-  [ -z "$SS_STDOUT" ] || { echo "expected empty stdout, got: $SS_STDOUT"; return 1; }
+case_wt_create_busy() {
+  # branch checked out elsewhere (the main tree) and no .worktrees/<fid> dir -> refuse
+  local d out
+  d="$(wt_repo)" || return 1
+  git -C "$d" checkout -q -b feature/login-fix || return 1
+  out="$(wt_cli "$d" worktree create --feature-id login-fix 2>&1)"; [ $? -eq 2 ] || { echo "expected exit 2 (feature busy): $out"; return 1; }
+  grep -q "feature busy" <<< "$out" || { echo "busy line missing: $out"; return 1; }
 }
 
-case_4_4() {  # corrupt policy file -> zero rules, allow + injection
-  local d
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  mkdir -p "$d/.orch-lite"
-  printf '%s' 'not json {{{' > "$d/.orch-lite/hook-policy.json"
-  ss_run "{\"cwd\": \"$d\"}"
-  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
-  python3 - "$SS_STDOUT" <<'PY'
-import json, sys
-d = json.loads(sys.argv[1])
-assert d["hookSpecificOutput"]["hookEventName"] == "SubagentStart"
-assert "SKILL.md" in d["hookSpecificOutput"]["additionalContext"]
-PY
+case_wt_list() {
+  local d out
+  d="$(wt_repo)" || return 1
+  wt_cli "$d" worktree create --feature-id login-fix >/dev/null || return 1
+  out="$(wt_cli "$d" worktree list)" || { echo "list failed: $out"; return 1; }
+  grep -q "feature/login-fix" <<< "$out" || { echo "branch group missing: $out"; return 1; }
+  grep -q "login-fix  $d/.worktrees/login-fix  \[clean\]" <<< "$out" || { echo "row missing: $out"; return 1; }
+  # dirty marking: an uncommitted file shows up as dirty (pure git, no index)
+  printf 'x\n' > "$d/.worktrees/login-fix/uncommitted.txt" || return 1
+  out="$(wt_cli "$d" worktree list)"
+  grep -q "dirty" <<< "$out" || { echo "dirty flag missing: $out"; return 1; }
 }
 
-case_4_5() {  # blocked_roots hit -> deny (policy is read from the cwd itself)
-  local d
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  mkdir -p "$d/.orch-lite"
-  printf '{"v":1,"subagent_start":{"blocked_roots":["%s"]}}' "$d" > "$d/.orch-lite/hook-policy.json"
-  ss_run "{\"cwd\": \"$d\"}"
-  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
-  python3 - "$SS_STDOUT" <<'PY'
-import json, sys
-d = json.loads(sys.argv[1])
-assert d["continue"] is False and "blocked_roots" in d["stopReason"]
-PY
+case_wt_remove() {
+  local d out
+  d="$(wt_repo)" || return 1
+  wt_cli "$d" worktree create --feature-id login-fix >/dev/null || return 1
+  # refuses when dirty
+  printf 'x\n' > "$d/.worktrees/login-fix/uncommitted.txt"
+  out="$(wt_cli "$d" worktree remove --feature-id login-fix 2>&1)"; [ $? -ne 0 ] || { echo "dirty remove must refuse: $out"; return 1; }
+  # --force removes, keeps the branch
+  out="$(wt_cli "$d" worktree remove --feature-id login-fix --force)" || { echo "force remove failed: $out"; return 1; }
+  [ ! -d "$d/.worktrees/login-fix" ] || { echo "dir still present"; return 1; }
+  git -C "$d" rev-parse -q --verify refs/heads/feature/login-fix >/dev/null || { echo "branch must be kept"; return 1; }
+  grep -q "Branch kept" <<< "$out" || { echo "branch-kept note missing: $out"; return 1; }
 }
 
-case_4_6() {  # inject_handbook:false -> allow, silent (pure audit mode)
-  local d
-  d="$(mktemp -d)" || return 1
-  TMP_DIRS+=("$d")
-  mkdir -p "$d/.orch-lite"
-  printf '{"v":1,"subagent_start":{"inject_handbook":false}}' > "$d/.orch-lite/hook-policy.json"
-  ss_run "{\"cwd\": \"$d\"}"
-  [ "$SS_RC" -eq 0 ] || { echo "exit $SS_RC"; return 1; }
-  [ -z "$SS_STDOUT" ] || { echo "expected empty stdout, got: $SS_STDOUT"; return 1; }
-  python3 - "$d" <<'PY'
-import json, sys, pathlib
-rec = json.loads(pathlib.Path(sys.argv[1], ".orch-lite", "subagent-start.log").read_text().splitlines()[-1])
-assert rec["decision"] == "allow"
-PY
+case_wt_merge() {
+  local d out
+  d="$(wt_repo)" || return 1
+  wt_cli "$d" worktree create --feature-id login-fix >/dev/null || return 1
+  # the child commits inside its worktree on the feature branch
+  printf 'work\n' > "$d/.worktrees/login-fix/work.txt"
+  git -C "$d/.worktrees/login-fix" add work.txt || return 1
+  git -C "$d/.worktrees/login-fix" -c user.name=login-fix -c user.email=f@l commit -q -m "work" || return 1
+  out="$(wt_cli "$d" worktree merge --feature-id login-fix)" || { echo "merge failed: $out"; return 1; }
+  grep -q "Merged feature/login-fix into main" <<< "$out" || { echo "merged line missing: $out"; return 1; }
+  git -C "$d" rev-parse -q --verify refs/heads/feature/login-fix >/dev/null || { echo "branch must be kept after merge"; return 1; }
+  [ "$(git -C "$d" show main:work.txt 2>/dev/null)" = "work" ] || { echo "merge content missing on main"; return 1; }
 }
 
 # --- run everything ---
@@ -981,8 +836,6 @@ run_case "1.30   worktree shape + dir exist -> allow"     case_1_30
 run_case "GATE   GATE_NOTICE rendered from gate constants, no deleted fields" case_gate_notice
 run_case "ROUTE  Step 0 routing line is a MUST (B)"       case_route_must
 run_case "audit  dispatch-validate broken shapes"         case_1_audit_shapes
-run_case "3.1    fresh project bootstrap (temp copy)"     case_3_1
-run_case "3.2    populated index injected (temp copy)"    case_3_2
 run_case "3.3    missing Request Routing -> fallback"     case_3_3
 run_case "3.6    missing Dispatch Package -> fallback"    case_3_6
 run_case "3.5    contract sections byte-identical"        case_3_5
@@ -991,19 +844,16 @@ run_case "audit  session-init empty stdin -> exit 0"      case_si_empty_stdin
 run_case "audit  session-init missing CLI -> exit 0"      case_si_audit_no_cli
 run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skillmd
 run_case "3.7    session-init unwritable cwd -> fallback, exit 0" case_si_unwritable_cwd
-run_case "3.8    CLI unwritable cwd: doctor/list/init human lines" case_cli_unwritable_cwd
-run_case "3.9    index --agent-id metadata kept, --agent flag gone" case_index_agent_binding
+run_case "3.8    CLI unwritable cwd: doctor human line"   case_cli_unwritable_cwd
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
 run_case "doctor4 install drift: sync/absent/dirty/3-diffs/gate/cross-layout" case_doctor_drift
-run_case "MEM   memory_set traverses list indices, clean errors" case_mem_set_list
-run_case "IDX   index --agent-id: set + read via list/show"     case_index_agent_id
 run_case "PY39  every python file parses as 3.9 (hooks + CLI)"  case_py39_parse
-run_case "4.1    subagent-start: no policy -> allow + injection + audit" case_4_1
-run_case "4.2    subagent-start: require_git_repo non-repo -> deny" case_4_2
-run_case "4.3    subagent-start: corrupt stdin -> silent zero-output" case_4_3
-run_case "4.4    subagent-start: corrupt policy -> zero rules, allow" case_4_4
-run_case "4.5    subagent-start: blocked_roots hit -> deny"      case_4_5
-run_case "4.6    subagent-start: inject_handbook:false -> audit-only" case_4_6
+run_case "WT.1   worktree create: new worktree + branch from main" case_wt_create_new
+run_case "WT.2   worktree create: idempotent reuse (reused + real path + note)" case_wt_create_idempotent
+run_case "WT.3   worktree create: branch checked out elsewhere -> feature busy" case_wt_create_busy
+run_case "WT.4   worktree list: grouped rows, clean/dirty (pure git)" case_wt_list
+run_case "WT.5   worktree remove: refuses dirty, --force removes, branch kept" case_wt_remove
+run_case "WT.6   worktree merge: clean merge into main, branch kept" case_wt_merge
 
 printf '%s\n' "${SUMMARY[@]}"
 echo

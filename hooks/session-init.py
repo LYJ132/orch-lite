@@ -1,30 +1,28 @@
 #!/usr/bin/env python3
-"""SessionStart hook: bootstrap the multi-agent runtime and inject context.
+"""SessionStart hook: inject the orch-lite contracts and gate notice.
 
 The skill must travel as a unit, so every path here derives from this file's
 own location (`__file__`) — zero hardcoded absolute paths. On session start:
 
 1. Consume the stdin event JSON (best-effort; its content is not needed).
-2. Idempotently run `<skill>/scripts/multi-agent init` (the CLI only creates
-   files that don't exist; it never overwrites).
-3. Run `multi-agent index list` and probe `multi-agent doctor` (Health). A
-   non-zero doctor exit with argparse-style "invalid choice"/"unrecognized"
-   output means the subcommand is absent and the section is skipped silently;
-   an empty output is likewise skipped.
-4. Extract the "## 5 Invariants (memorize)", "## Request Routing" and
+2. Extract the "## 5 Invariants (memorize)", "## Request Routing" and
    "## Dispatch Package (MUST template)" sections verbatim from SKILL.md
    (single source of truth; the hook holds no second copy of the contracts)
    and inject each as its own labeled part.
-5. Assemble the payload attention-first: the three SKILL.md contract sections
-   open it (iron rules before routing before dispatch), the runtime state
-   sections (Bootstrap, Agent Index, Health) close it.
+3. Render the GATE_NOTICE from the gate contract constants single-sourced in
+   dispatch-validate.py (importlib — the filename carries a hyphen).
+4. Probe `multi-agent doctor` (Health). A non-zero doctor exit with
+   argparse-style "invalid choice"/"unrecognized" output means the
+   subcommand is absent and the section is skipped silently; an empty
+   output is likewise skipped. The hook writes nothing: 1.3.0 has no state
+   file, so there is no runtime bootstrap at all.
 
 Fail-soft rendering: a CLI-derived section whose CLI call fails (non-zero
-exit, a "bootstrap skipped: ..." line, or traceback-shaped output — e.g. the
-session cwd is unwritable) collapses to ONE human line,
-'--- <Section> (skipped: <reason>) ---'. The words "Traceback", 'File "' and
-"PermissionError" never survive into the payload, so an unwritable cwd can no
-longer poison the session context with a raw traceback.
+exit or traceback-shaped output — e.g. the session cwd is unwritable)
+collapses to ONE human line, '--- <Section> (skipped: <reason>) ---'. The
+words "Traceback", 'File "' and "PermissionError" never survive into the
+payload, so an unwritable cwd can no longer poison the session context with
+a raw traceback.
 
 Graceful degradation: any error → best-effort output; the hook always exits 0
 and prints exactly one {"additionalContext": ...} JSON — it never crashes the
@@ -75,8 +73,7 @@ SKILL_MD = next(
 # from its heading to the next '---' or '## ' heading. SKILL.md is the single
 # source of truth — the hook holds no second copy. Tuple order is injection
 # order: the iron rules come first so they are read before the routing and
-# dispatch sections. Contract sections as a block precede the runtime state
-# sections (Bootstrap / Agent Index / Health), which render last.
+# dispatch sections. The Health section (doctor probe) renders last.
 CONTRACT_SECTIONS = (
     ("## 5 Invariants (memorize)", "5 Invariants (memorize)"),
     ("## Request Routing (main agent's first decision)", "Request Routing"),
@@ -87,15 +84,16 @@ MISSING_CONTRACT = "(contract section missing in SKILL.md)"
 # argparse marks a not-yet-existing subcommand with these strings.
 DOCTOR_ABSENT_MARKERS = ("invalid choice", "unrecognized")
 
-# ---- Bootstrap (runs before/alongside the CLI init; pure + idempotent) ----
-# The runtime state dir is `.orch-lite/` (dot prefix = tool-managed runtime).
-# Flat layout: `.orch-lite/index.json` + `.orch-lite/memory.json`. The hook
-# NEVER probes or touches any legacy directory — a user's project may contain
-# its own `multi-agent/` directory, which is none of this plugin's business.
-STATE_DIR = Path.cwd() / ".orch-lite"
+# Traceback machinery words that must never reach the payload (an unwritable
+# cwd once injected a raw PermissionError traceback via the CLI's stderr).
+TRACEBACK_MARKERS = ("Traceback", 'File "', "PermissionError")
+# Final line of a raw Python traceback for an OS error, e.g.
+# "PermissionError: [Errno 13] Permission denied: '/home/x/multi-agent'" --
+# reduced to path + reason, the exception machinery itself is dropped.
+_ERRNO_EXC_RE = re.compile(
+    r"^[A-Za-z_][\w.]*(?:Error|Exception): \[Errno \d+\] (.+): '(.+)'$"
+)
 
-INDEX_SKELETON = '{"tasks": {}}'
-MEMORY_SKELETON = '{"common_knowledge": {}, "experiences": [], "task_patterns": {}, "contracts": []}'
 
 # Fixed visibility line: the dispatch gate must be seen from session start.
 # Single-sourced: rendered from the gate contract constants that live in
@@ -134,58 +132,8 @@ except Exception:
     )
 
 
-def _write_if_absent(path: Path, content: str) -> bool:
-    """Create `path` with `content` only when it does not exist."""
-    if path.exists():
-        return False
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    return True
-
-
-def bootstrap_runtime() -> List[str]:
-    """Idempotent, never-destructive runtime bootstrap. Returns human lines.
-
-    - `.orch-lite/` created when missing (default `memory.json` skeleton,
-      empty `index.json` — flat layout).
-    Nothing existing is ever modified or deleted. Any OSError collapses to
-    one human line — never a traceback.
-    """
-    lines: List[str] = []
-    try:
-        created = _write_if_absent(STATE_DIR / "index.json", INDEX_SKELETON)
-        created |= _write_if_absent(STATE_DIR / "memory.json", MEMORY_SKELETON)
-        if created:
-            lines.append("bootstrap: .orch-lite/ created (fresh skeleton)")
-    except OSError as exc:
-        reason = getattr(exc, "strerror", None) or type(exc).__name__
-        lines.append("bootstrap skipped: %s" % reason)
-    return lines
-
-# Traceback machinery words that must never reach the payload (an unwritable
-# cwd once injected a raw PermissionError traceback via the CLI's stderr).
-TRACEBACK_MARKERS = ("Traceback", 'File "', "PermissionError")
-# The fail-soft CLI announces a degraded bootstrap with this line prefix.
-BOOTSTRAP_SKIP_PREFIX = "bootstrap skipped: "
-# Final line of a raw Python traceback for an OS error, e.g.
-# "PermissionError: [Errno 13] Permission denied: '/home/x/multi-agent'" --
-# reduced to path + reason, the exception machinery itself is dropped.
-_ERRNO_EXC_RE = re.compile(
-    r"^[A-Za-z_][\w.]*(?:Error|Exception): \[Errno \d+\] (.+): '(.+)'$"
-)
-
-
 def _has_traceback_markers(text: str) -> bool:
     return any(marker in text for marker in TRACEBACK_MARKERS)
-
-
-def _skip_detail(out: str) -> str:
-    """The reason clause of the CLI's own fail-soft line, or '' when absent."""
-    for line in (out or "").splitlines():
-        line = line.strip()
-        if line.startswith(BOOTSTRAP_SKIP_PREFIX):
-            return line[len(BOOTSTRAP_SKIP_PREFIX):]
-    return ""
 
 
 def _failure_detail(out: str, code: int) -> str:
@@ -212,17 +160,15 @@ def _render_cli(label: str, args: List[str], default_body: str,
     """Render one CLI-derived section with fail-soft fallback.
 
     Success → '--- <label> (multi-agent <args>) ---' plus the CLI output.
-    Failure (non-zero exit, a bootstrap-skip line, or traceback-shaped text)
-    → the single human line '--- <label> (skipped: <reason>) ---'.
+    Failure (non-zero exit or traceback-shaped text) → the single human line
+    '--- <label> (skipped: <reason>) ---'.
     """
     out = (out or "").strip()
-    skip = _skip_detail(out)
-    if code == 0 and skip == "" and not _has_traceback_markers(out):
+    if code == 0 and not _has_traceback_markers(out):
         return "--- %s (multi-agent %s) ---\n%s" % (
             label, " ".join(args), out or default_body
         )
-    detail = skip if skip else _failure_detail(out, code)
-    return "--- %s (skipped: %s) ---" % (label, detail)
+    return "--- %s (skipped: %s) ---" % (label, _failure_detail(out, code))
 
 
 def read_stdin_event() -> dict:
@@ -306,25 +252,13 @@ def build_context() -> str:
     """Assemble the single additionalContext payload (compact).
 
     Attention-critical content first: the SKILL.md contract sections (iron
-    rules, routing, dispatch) open the payload; the runtime state sections
-    (Bootstrap, Agent Index, Health) close it.
+    rules, routing, dispatch) open the payload, the gate notice follows, and
+    the doctor Health probe (read-only; the hook writes nothing) closes it.
     """
-    code, init_out = run_cli(["init"])
-    index_code, index_out = run_cli(["index", "list"])
-
     parts = ["[orch-lite]"]
     for label, section in contract_sections():
         parts.append(f"--- {label} (from SKILL.md) ---\n{section}")
     parts.append("--- Dispatch gate (hook-enforced) ---\n" + GATE_NOTICE)
-    bootstrap_lines = bootstrap_runtime()
-    if bootstrap_lines:
-        parts.append("--- Bootstrap (hook) ---\n" + "\n".join(bootstrap_lines))
-    parts.append(
-        _render_cli("Bootstrap", ["init"], "(no output)", code, init_out)
-    )
-    parts.append(
-        _render_cli("Agent Index", ["index", "list"], "(empty)", index_code, index_out)
-    )
     health = health_section()
     if health:
         parts.append(health)

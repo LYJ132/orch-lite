@@ -107,10 +107,12 @@ No PostToolUse hook is registered anymore; only SessionStart
 
 ---
 
-## Hook 3: `session-init.py` — SessionStart, v3: bootstrap + index + doctor probe + verbatim contracts
+## Hook 3: `session-init.py` — SessionStart, verbatim contracts + gate notice + doctor probe
 
-The v3 hook assembles one `{"additionalContext": ...}` payload with six
-sections — attention-critical contracts first, runtime state last:
+The hook assembles one `{"additionalContext": ...}` payload — attention-critical
+contracts first, the doctor probe last. It writes NOTHING: 1.3.0 has no state
+file (`.orch-lite/` is never created; the runtime bootstrap of older versions
+is deleted).
 
 1. **5 Invariants (memorize)** — the "## 5 Invariants (memorize)" section
    extracted verbatim from SKILL.md (the behavioral iron rules, seen before
@@ -119,16 +121,16 @@ sections — attention-critical contracts first, runtime state last:
    from SKILL.md;
 3. **Dispatch Package (MUST template)** — the "## Dispatch Package (MUST
    template)" section extracted verbatim from SKILL.md;
-4. **Bootstrap** — idempotent `multi-agent init` (creates what's missing,
-   overwrites nothing; also bootstraps git in a repo-less project);
-5. **Agent Index** — `multi-agent index list` (flat task list), so principle
-   3 ("recover minimal state") is automatic;
-6. **Health** — a probe of `multi-agent doctor`, captured but *tolerated for
+4. **Dispatch gate (hook-enforced)** — the GATE_NOTICE, rendered from the
+   gate contract constants single-sourced in `dispatch-validate.py`
+   (importlib; the load failure path degrades to a generic notice naming no
+   field — the regression pin is the `GATE` row in Hook 1's matrix);
+5. **Health** — a probe of `multi-agent doctor`, captured but *tolerated for
    absence*: non-zero exit, empty output, or argparse "invalid choice" /
    "unrecognized" text → the section is skipped silently (the hook stays
    usable against CLI copies that predate doctor). When doctor exists, its
-   findings (`dirty:` / `stale:` / `main-violation:` lines, or
-   `doctor: all clear`) appear verbatim.
+   findings (`dirty:` / `main-violation:` lines, or `doctor: all clear`)
+   appear verbatim.
 
 The three contract sections come from SKILL.md only (single source of truth —
 the hook holds no second copy; the extraction table in the hook just names
@@ -142,103 +144,22 @@ line with exit 0 — the hook never crashes the session.
 
 | # | Setup | Expected | Actual |
 |---|---|---|---|
-| 3.1 | fresh project, no `.orch-lite/` | creates the full tree (`index.json`, `memory.json`; git bootstrapped when repo-less); all four memory sections present, index shows `Index is empty`, Health shows `doctor: all clear` | ✅ |
-| 3.2 | project with a populated index / existing `.orch-lite/` | re-runs init idempotently (no overwrite), shows the flat task list, injects the Request Routing section, Health reflects doctor (e.g. stale/dirty findings) | ✅ |
-| 3.3 | SKILL.md without a "## Request Routing" section | graceful fallback line "(contract section missing in SKILL.md)" in additionalContext for that section, no crash (exit 0), init + index + Health still work | ✅ |
+| 3.3 | SKILL.md without a "## Request Routing" section | graceful fallback line "(contract section missing in SKILL.md)" in additionalContext for that section, no crash (exit 0), Health still works | ✅ |
 | 3.4 | CLI copy predating the doctor subcommand | Health skipped silently (graceful-absence probe), the other sections intact, exit 0 | ✅ |
 | 3.5 | SKILL.md with all three contract sections (current shape) | additionalContext contains "--- 5 Invariants (memorize) (from SKILL.md) ---", "--- Request Routing (from SKILL.md) ---" and "--- Dispatch Package (MUST template) (from SKILL.md) ---", each section byte-identical to the SKILL.md text (verified programmatically: `extract_contract` output vs the slice between headings) | ✅ |
 | 3.6 | SKILL.md without the "## Dispatch Package (MUST template)" section | fallback line for that section only, no crash, exit 0 | ✅ |
-| 3.7 | session cwd unwritable (chmod 555 dir; e.g. a root-owned 755 project) | hook exits 0; Bootstrap + Agent Index render `--- <Section> (skipped: cannot create <path>: Permission denied) ---`; the words `Traceback`, `File "`, `PermissionError` never appear in the payload; contract sections still inject; nothing created in the cwd | ✅ |
-| 3.8 | same unwritable cwd, raw CLI calls | `doctor` → `(doctor: not a repo)`, exit 0; `index list` → one `bootstrap skipped: cannot create ...` line, exit 0; explicit `init` → same line, clean non-zero; no traceback on any channel | ✅ |
+| 3.7 | session cwd unwritable (chmod 555 dir; e.g. a root-owned 755 project) | hook exits 0; nothing is created (no state file to bootstrap); the words `Traceback`, `File "`, `PermissionError` never appear in the payload; contract sections still inject | ✅ |
+| 3.8 | same unwritable cwd, raw `doctor` call | `doctor` → `(doctor: not a repo)`, exit 0, cwd untouched | ✅ |
 
-> Note (2026-09-12, impl-20260912-04/07): rows 3.1–3.6 are executable —
+> Note (2026-09-12, impl-20260912-04/07): rows 3.3–3.6 are executable —
 > `bash tests/run.sh` covers them (3.5 asserts byte-identity via sha256;
-> 3.1/3.2/3.3/3.6 run in mktemp sandboxes under a `GIT_CEILING_DIRECTORIES`
+> 3.3/3.6 run in mktemp sandboxes under a `GIT_CEILING_DIRECTORIES`
 > ceiling so a stray repo at a TMPDIR ancestor cannot leak in). Rows 3.7/3.8
-> (impl-20260912-10, fail-soft on unwritable cwds) are executable too and use
-> the same ceiling; they are vacuously green when run as root.
+> are vacuously green when run as root.
 
 The injected contract is byte-identical to the SKILL.md section (verified
 programmatically), so editing SKILL.md is the only way the routing rule
 changes — the hook never drifts from it.
-
----
-
-## Hook 4: `subagent-start.py` — SubagentStart (Codex-only), audit + cwd policy + handbook injection
-
-Codex-only lifecycle event: dispatching a subagent is a `SubagentStart`
-event, NOT a `PreToolUse` tool call (Codex's collab `spawn_agent` channel
-never triggers PreToolUse). ZCode does not support the event name and
-silently ignores it — the shared `hooks/hooks.json` entry is a capability
-probe, and the existing SessionStart / PreToolUse entries are untouched.
-
-Responsibilities (deliberately narrowed — see the rev2 design doc):
-audit logging, cwd-level scope policy, and `additionalContext` handbook
-injection. There is NO content validation of dispatch packages (the event
-input carries no prompt / tool_input, so no channel exists on Codex).
-
-Output contract (stdout JSON, per Codex's `subagent-start.command.output`
-schema):
-
-- allow + injection: `{"hookSpecificOutput": {"hookEventName":
-  "SubagentStart", "additionalContext": "[orch-lite SubagentStart] ..."}}`
-- deny: `{"continue": false, "stopReason": "<rule>", "hookSpecificOutput":
-  {"hookEventName": "SubagentStart"}}` (no additionalContext)
-- allow with `inject_handbook: false`: prints NOTHING (audit-only mode)
-- any internal error (malformed stdin, missing cwd, broken policy, git
-  unavailable, log write failure): fail-open, silent, zero output
-
-Audit: one JSON line appended per decision to
-`<cwd>/.orch-lite/subagent-start.log` and mirrored to
-`~/.orch-lite/hook-observe/subagent-start.log` (fields: v, ts, decision,
-reason, agent_id, agent_type, model, session_id, turn_id, cwd). Log write
-failures never affect the decision.
-
-### Policy file: `<project>/.orch-lite/hook-policy.json` (runtime-only, NOT shipped)
-
-```json
-{
-  "v": 1,
-  "subagent_start": {
-    "require_git_repo": false,
-    "inject_handbook": true,
-    "allowed_roots": [],
-    "blocked_roots": []
-  }
-}
-```
-
-- File absent or corrupt = **zero rules** (allow + injection); empty
-  arrays likewise. The file is runtime-only: each project opts in by
-  creating it; nothing is shipped with the plugin.
-- `"v": 1` is the policy schema version for future evolution.
-- **`require_git_repo` stays conservatively `false` at the factory default**:
-  the exact deny semantics are not yet pinned (after the thread is created,
-  does `continue:false` block the first turn or reap the thread? — design
-  doc §2.8-3). Do not enable deny-class rules by default until that is
-  verified against a live Codex spawn; projects may set it to `true`
-  themselves after confirming deny is safe.
-- `inject_handbook` is the injection-channel degradation switch:
-  additionalContext may travel the same broken encrypted pipeline as the
-  multi-agent v2 `encrypted_content` payload. If live verification shows the
-  injection never reaches the subagent rollout, set it to `false` — the hook
-  degrades to pure audit mode (deny policies and logging still apply).
-
-| # | Input | Expected | Actual |
-|---|---|---|---|
-| 4.1 | valid stdin, no policy file | exit 0; exact allow JSON (hookEventName=SubagentStart, handbook additionalContext); one audit line, decision=allow | ✅ |
-| 4.2 | policy `require_git_repo:true`, cwd a non-repo | deny JSON: `continue:false`, stopReason names require_git_repo | ✅ |
-| 4.3 | corrupt stdin | exit 0, silent, zero stdout | ✅ |
-| 4.4 | corrupt hook-policy.json | zero rules: allow + injection | ✅ |
-| 4.5 | policy `blocked_roots` containing cwd | deny JSON, stopReason names blocked_roots | ✅ |
-| 4.6 | policy `inject_handbook:false` | exit 0, zero stdout, audit line decision=allow (pure audit mode) | ✅ |
-
-> Note (2026-09-17, impl-20260914-24): rows 4.1–4.6 are executable —
-> `bash tests/run.sh` covers them (HOME pointed at a temp dir so the
-> `~/.orch-lite` audit mirror never touches the real home; the non-repo cwd
-> relies on the `GIT_CEILING_DIRECTORIES` hermetic sandbox). Live Codex
-> desktop spawn verification (trigger confirmation, injection-arrival
-> confirmation) is owner-side and pending.
 
 ---
 
@@ -251,7 +172,7 @@ belong to which platform lives here, since JSON cannot carry comments:
 | Entries | Platform section |
 |---|---|
 | PreToolUse (`dispatch-validate.py`) | ZCode: full dispatch gate |
-| SessionStart + SubagentStart | Codex: injection-only (SubagentStart) + SessionStart |
+| SessionStart | Codex + ZCode: context injection |
 
 > Incident lesson (hotfix of the 1.2.0 `_sections`/`_comment` markers):
 > Codex validates hooks.json strictly — no extra keys; platform sectioning
@@ -274,13 +195,13 @@ belong to which platform lives here, since JSON cannot carry comments:
   `~/.agents`) must preserve permission bits (`cp -p`), not just file content.
 - Config-file hooks are disabled by default; `~/.zcode/cli/config.json` sets
   `hooks.enabled: true`.
-- Registered hooks: **SessionStart** (`session-init.py`), **PreToolUse**
-  (`dispatch-validate.py`, matcher `Agent|Task`) and — since 2026-09-17
-  (impl-20260914-24) — **SubagentStart** (`subagent-start.py`, Codex only;
-  ZCode silently ignores the unsupported event name). The PostToolUse entry
-  was removed when `dangling-occupancy-check.py` was retired (Hook 2 above);
-  no other hook files or registrations exist. The SubagentStart policy file
-  (`.orch-lite/hook-policy.json`) is runtime-only and NOT shipped.
-- All three hooks are idempotent, read-only or self-limiting, and degrade
+- Registered hooks: **SessionStart** (`session-init.py`) and **PreToolUse**
+  (`dispatch-validate.py`, matcher `Agent|Task`). The PostToolUse entry was
+  removed when `dangling-occupancy-check.py` was retired (Hook 2 above); the
+  SubagentStart entry and `subagent-start.py` were deleted outright in 1.3.0
+  (owner decision 2026-10-03 — a never-runtime-validated Codex adaptation;
+  the dispatch gate's handbook pointer makes it redundant). No other hook
+  files or registrations exist.
+- Both hooks are idempotent, read-only or self-limiting, and degrade
   gracefully (empty output / silent) on malformed input — they never block
   the session.
