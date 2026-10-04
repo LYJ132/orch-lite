@@ -70,7 +70,7 @@ the agent resumable by feature). An optional `worktree` field must equal
 | 1.28 | `worktree` field of the wrong shape (`.worktrees/some-other-fid`) | exit 2, stderr: `worktree field must be .worktrees/<feature_id>` | ✅ |
 | 1.29 | `worktree` shape right but the directory does not exist in the cwd | exit 2, stderr: `does not exist` | ✅ |
 | 1.30 | `worktree` shape right + directory exists (sandbox cwd) | exit 0, empty stdout | ✅ |
-| ROUTE | SKILL.md Step 0: routing line restated as a MUST; self-repair clause and the three `[routing]` states intact | assertions on the Request Routing section | ✅ |
+| ROUTE | SKILL.md Step 0: routing line restated as a MUST; self-repair clause and the `[routing]` states (chat / task / orchestration / resume) intact | assertions on the Request Routing section | ✅ |
 | GATE | session-init output: the `--- Dispatch gate (hook-enforced) ---` notice | rendered from the gate constants; names NO deleted field (`reuses` / `task_id` / `role`), names every gate constant | ✅ |
 
 Hard enforcement (1.4, 1.7, 1.11–1.12) is the design point: the fenced
