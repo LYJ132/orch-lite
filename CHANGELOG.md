@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.1 (2026-10-04)
+
+### Added
+- Agent reuse across follow-ups: when a follow-up order for `feature/<fid>`
+  finds the owning child agent still alive, the main agent resumes that agent
+  via SendMessage with a four-line SUPERSEDES order (`SUPERSEDES` /
+  `STILL VALID` / `ACCEPTANCE` / `READ FIRST`) instead of dispatching a fresh
+  one. A fresh hand-off is used only when the agent is worn, stuck, failed, or
+  its id was lost. This adds a fourth routing state
+  (`[routing] resume <fid> (agent_<id>)`) and codifies the
+  `agent_<id>` id-handle convention: dispatch receipts report the agent id,
+  and it is the only durable handle to a live child agent.
+
 ## 1.3.0 (2026-10-03)
 
 Minimal, platform-agnostic release: **no state file** — every fact lives in
