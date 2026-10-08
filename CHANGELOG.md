@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.2 (2026-10-04)
 
 ### Changed
 - **CLI renamed: `scripts/multi-agent` -> `scripts/orch-lite`.** The old name
