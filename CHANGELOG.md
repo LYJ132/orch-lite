@@ -11,6 +11,7 @@
   `tests/hooks.md`, `.gitattributes`, and the CLI's own usage/help strings).
   Prose uses of the adjective "multi-agent" (plugin descriptions, Codex's
   "multi-agent v2" platform feature) are deliberately unchanged.
+- Changed: identity descriptions refreshed — four routing states, orchestration wording replaces the multi-agent identity claim.
 
 ### Added
 - Executor handbook workspace guard: immediately before the git bootstrap step,
