@@ -9,8 +9,8 @@
   every reference to the script path or command is updated (both SKILL.md files,
   `references/02-protocol.md`, `hooks/session-init.py`, `tests/run.sh`,
   `tests/hooks.md`, `.gitattributes`, and the CLI's own usage/help strings).
-  Prose uses of the adjective "multi-agent" (plugin descriptions, Codex's
-  "multi-agent v2" platform feature) are deliberately unchanged.
+  Prose uses of the adjective "multi-agent" (Codex's "multi-agent v2" platform
+  feature) are deliberately unchanged.
 - Changed: identity descriptions refreshed — four routing states, orchestration wording replaces the multi-agent identity claim.
 
 ### Added
