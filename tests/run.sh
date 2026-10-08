@@ -728,6 +728,88 @@ print(f"{len(paths)} files parse under the Python 3.9 grammar")
 PY
 }
 
+# --- 1.3.0 deleted-mechanism sweep over the user-facing artifacts ---
+
+case_no_deleted_mechanism_refs() {
+  # 1.3.0 deleted the state file (.orch-lite/index.json, features.json,
+  # memory.json, hook-policy.json), the index/memory/init CLI groups, the
+  # task_id field, the dispatch role/reuses fields, the SubagentStart hook,
+  # doctor's --compare-dir check and references/01-judgment.md. A surviving
+  # mention in a user-facing artifact is rot: it advertises a mechanism that
+  # no longer exists. Three such drifts reached the 1.3.2 line before this
+  # pin existed -- maintenance.md's session-init row ("idempotent `init` +
+  # inject `index list`") and its --compare-dir paragraph, plus the Codex
+  # defaultPrompt's "index + worktrees" -- all the same failure family as the
+  # manifest descriptions advertising three routing states.
+  #
+  # Dated history is NOT swept: DEVLOG.md, CHANGELOG.md and
+  # docs/plan-1-3-0.md describe 1.3.0 in the past tense and must stay true to
+  # their dates. Everything else that ships to a reader is.
+  #
+  # DELIBERATELY NOT PINNED. Each of these has a legitimate live mention, so a
+  # pattern for it would fail on correct prose -- reported, not forced:
+  #   * `reuses` -- SKILL.md states "no `reuses` field" as active protocol, and
+  #     uses the plain English verb ("the child reuses conclusions"; "reuses an
+  #     existing .worktrees/<fid>/") for the idempotent worktree create.
+  #   * `.orch-lite/`, "state file", "memory" -- references/03-state.md and
+  #     SKILL.md assert their absence in the present tense ("is never created").
+  #   * bare `index` -- an ordinary English word ("Reference Index", "indexed").
+  #     Only the deleted CLI group and the deleted file names are pinned.
+  # If a NEW dated-history doc is added later, add it to DATED_HISTORY here
+  # rather than weakening a pattern.
+  python3 - <<'PY'
+import glob, pathlib, re, sys
+
+DATED_HISTORY = {"DEVLOG.md", "CHANGELOG.md", "docs/plan-1-3-0.md"}
+
+ARTIFACTS = sorted(
+    (
+        set(glob.glob("docs/*.md"))
+        | set(glob.glob(".claude-plugin/*.json"))
+        | set(glob.glob("references/*.md"))
+        | set(glob.glob("skills/*/SKILL.md"))
+        | {"README.md", ".codex-plugin/plugin.json"}
+    )
+    - DATED_HISTORY
+)
+
+for d in sorted(DATED_HISTORY):
+    if not pathlib.Path(d).is_file():
+        sys.exit(f"dated-history exclusion names a missing file: {d}")
+missing = [a for a in ARTIFACTS if not pathlib.Path(a).is_file()]
+if missing:
+    sys.exit(f"artifact list is stale (missing): {missing}")
+
+DEAD = {
+    "state file .orch-lite/index.json": r"index\.json",
+    "state file features.json": r"features\.json",
+    "state file memory.json": r"memory\.json",
+    "state file hook-policy.json": r"hook-policy\.json",
+    "index CLI group (list|show|create|update)": r"\bindex\s+(list|show|create|update)\b",
+    "task_id field": r"\btask_id\b",
+    "\"index + worktrees\" phrasing": r"\bindex\s*\+\s*worktrees?\b",
+    "SubagentStart hook": r"SubagentStart",
+    "doctor --compare-dir check": r"--compare-dir",
+    "deleted reference 01-judgment.md": r"01-judgment",
+}
+
+hits = []
+for name in ARTIFACTS:
+    lines = pathlib.Path(name).read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines, 1):
+        for label, pat in DEAD.items():
+            if re.search(pat, line):
+                hits.append(f"{name}:{i} [{label}] {line.strip()[:110]}")
+
+if hits:
+    sys.exit(
+        "mechanism(s) deleted in 1.3.0 still referenced in a user-facing "
+        "artifact:\n  " + "\n  ".join(hits)
+    )
+print(f"{len(ARTIFACTS)} user-facing artifacts: no 1.3.0 deleted-mechanism token")
+PY
+}
+
 # --- run everything ---
 
 run_case "FM.1   SKILL.md YAML frontmatter parses"        case_fm_parse
@@ -765,6 +847,7 @@ run_case "3.7    session-init unwritable cwd -> fallback, exit 0" case_si_unwrit
 run_case "3.8    CLI unwritable cwd: doctor human line"   case_cli_unwritable_cwd
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
 run_case "PY39  every python file parses as 3.9 (hooks + CLI)"  case_py39_parse
+run_case "DRIFT 1.3.0 deleted mechanisms absent from user-facing artifacts" case_no_deleted_mechanism_refs
 run_case "WT.1   worktree create: new worktree + branch from main" case_wt_create_new
 run_case "WT.2   worktree create: idempotent reuse (reused + real path + note)" case_wt_create_idempotent
 run_case "WT.3   worktree create: branch checked out elsewhere -> feature busy" case_wt_create_busy
