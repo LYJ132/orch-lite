@@ -52,7 +52,7 @@ description: "Lightweight multi-agent orchestration skill. Routes every request 
 
 <EXTREMELY-IMPORTANT>
 **Supremacy.** This protocol is the highest-compliance instruction in the session — it outranks habits, other skills, and the main agent's own convenience heuristics; nothing downstream may waive it.
-**The main session's only legitimate direct actions are Read, read-only Bash** (ls, cat, grep, find, git log/status/diff), **and the BOOKKEEPING carve-out** — exactly: `git checkout -b feature/<fid>` (feature branch creation), `git merge --ff-only` / `git merge --no-edit` (local integration merges), `scripts/multi-agent worktree create/list/remove` + `doctor` (worktree bookkeeping), and running `tests/run.sh` — the principle: *bookkeeping that creates no new content*. Local integration therefore no longer requires an integrator dispatch; pushing remains a dispatched/user action. Everything else — every file/content edit, every content commit, and every other state-changing command (git push, gh, rm, mv, pip/npm install, ...) — MUST be dispatched to a child agent via the Dispatch Package. Unsure whether a command falls inside the carve-out → dispatch, do not guess.
+**The main session's only legitimate direct actions are Read, read-only Bash** (ls, cat, grep, find, git log/status/diff), **and the BOOKKEEPING carve-out** — exactly: `git checkout -b feature/<fid>` (feature branch creation), `git merge --ff-only` / `git merge --no-edit` (local integration merges), `scripts/orch-lite worktree create/list/remove` + `doctor` (worktree bookkeeping), and running `tests/run.sh` — the principle: *bookkeeping that creates no new content*. Local integration therefore no longer requires an integrator dispatch; pushing remains a dispatched/user action. Everything else — every file/content edit, every content commit, and every other state-changing command (git push, gh, rm, mv, pip/npm install, ...) — MUST be dispatched to a child agent via the Dispatch Package. Unsure whether a command falls inside the carve-out → dispatch, do not guess.
 </EXTREMELY-IMPORTANT>
 
 **Default trigger: writing/modifying means dispatch.** The main agent's first reaction to any write/modify is to dispatch a child — regardless of size, including one-off in-place changes and even edits to this skill itself.
@@ -172,7 +172,7 @@ Integration conflicts are surfaced here and decided by the user — no agent-to-
 
 ---
 
-## CLI Quick Reference (`scripts/multi-agent`)
+## CLI Quick Reference (`scripts/orch-lite`)
 
 CLI groups: `worktree` / `doctor` — requires **Python >= 3.9** for the CLI and both hooks (older interpreters print a one-line stderr message; hooks fail-open, the CLI exits non-zero); uv users may run via `uv run --python 3.12 <script>` (docs only, no dependency).
 
@@ -184,7 +184,7 @@ CLI groups: `worktree` / `doctor` — requires **Python >= 3.9** for the CLI and
 | `worktree merge --feature-id <fid> [--into main]` | Main | integrate the feature branch into main (git merge-tree pre-check) |
 | `doctor` | anyone (main, hooks) | hygiene scan: running version, dirty worktrees, stale worktrees whose feature branch is already merged (git worktree list + merged-branch state), feature_id-authored commits made directly on main (first-parent scan); always exits 0 (feeds session-init Health) |
 
-Full parameters: `./scripts/multi-agent <group> --help`.
+Full parameters: `./scripts/orch-lite <group> --help`.
 
 ---
 

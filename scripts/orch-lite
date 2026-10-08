@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Extensionless on purpose: this is an executable CLI invoked as `scripts/multi-agent`,
+# Extensionless on purpose: this is an executable CLI invoked as `scripts/orch-lite`,
 # not an importable module -- keep the 100755 exec bit (see .gitattributes: sync tools
 # have stripped it, plus rewritten CRLF, and killed every hook).
 """
@@ -11,7 +11,7 @@ branch feature/<feature_id>, worktree .worktrees/<feature_id>/, git commit
 author (GIT_AUTHOR_NAME=<feature_id>).
 
 Usage:
-    multi-agent <command> [options]
+    orch-lite <command> [options]
 
 Commands:
     worktree create       Create (or reuse) .worktrees/<feature-id>/ on branch feature/<feature-id>
@@ -31,7 +31,7 @@ import sys
 # mutation half-understood by an old interpreter is worse than a clean stop).
 if sys.version_info < (3, 9):
     sys.stderr.write(
-        "[orch-lite] multi-agent requires Python >= 3.9 "
+        "[orch-lite] CLI requires Python >= 3.9 "
         "(found %d.%d); refusing to run. Upgrade Python or run via "
         "`uv run --python 3.12 <script>`.\n" % sys.version_info[:2]
     )
