@@ -33,6 +33,12 @@ Where can I write?
   · JSON has a `worktree:` context line → enter `.worktrees/<feature_id>/` (it IS your only write area)
   · no worktree line → the working tree itself is your write area (single task, no concurrency)
     ↓
+Workspace guard — BEFORE the bootstrap: list the immediate subdirectories (skip
+node_modules, .venv, venv, vendor, target, build, dist, .git, .cache). Any containing a
+.git → this directory is a WORKSPACE, not a project: do NOT git init — report the project
+paths to the main session and stop (the check below only looks UP, so bootstrapping here
+would wrap those existing child repos in a new parent repo).
+    ↓
 Ensure a repo exists (the git bootstrap — the child's duty, dsh executor pattern):
   git rev-parse --is-inside-work-tree 2>/dev/null || {
       git init -b main
