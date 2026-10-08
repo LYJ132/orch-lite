@@ -30,7 +30,7 @@
     ],
     "defaultPrompt": [
       "Dispatch this as a background child agent and keep coordinating.",
-      "Orchestrate this multi-item request with index + worktrees."
+      "Orchestrate this multi-item request with worktrees."
     ],
     "websiteURL": "https://github.com/LYJ132/orch-lite",
     "privacyPolicyURL": "https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement",
