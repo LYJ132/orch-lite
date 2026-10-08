@@ -9,8 +9,19 @@
   every reference to the script path or command is updated (both SKILL.md files,
   `references/02-protocol.md`, `hooks/session-init.py`, `tests/run.sh`,
   `tests/hooks.md`, `.gitattributes`, and the CLI's own usage/help strings).
-  Prose uses of the adjective "multi-agent" (plugin descriptions, Codex's
-  "multi-agent v2" platform feature) are deliberately unchanged.
+  Prose uses of the adjective "multi-agent" (Codex's "multi-agent v2" platform
+  feature) are deliberately unchanged.
+- Changed: identity descriptions refreshed — four routing states, orchestration wording replaces the multi-agent identity claim.
+- **Doc-drift sweep: 1.3.0's deletions are no longer advertised as live.** In
+  `docs/maintenance.md` the `session-init.py` row now matches 1.3.0 reality
+  (the hook writes nothing; the runtime bootstrap is gone) and the paragraph
+  describing `doctor --compare-dir` is removed with that install-drift check;
+  the Codex `interface.defaultPrompt` no longer offers "index + worktrees"
+  orchestration now that the index is deleted. A new `DRIFT` regression case
+  pins every user-facing artifact (README, `docs/*.md`, both manifests, both
+  skills, `references/*.md`) free of deleted-mechanism tokens, exempting only
+  dated history (`DEVLOG.md`, `CHANGELOG.md`, `docs/plan-1-3-0.md`) and the
+  tokens correct prose still needs (`reuses`, `.orch-lite/`, bare `index`).
 
 ### Added
 - Executor handbook workspace guard: immediately before the git bootstrap step,
