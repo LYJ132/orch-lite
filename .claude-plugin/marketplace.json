@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "orch-lite",
-      "description": "Lightweight multi-agent orchestration skill.",
+      "description": "Lightweight orchestration skill for coding sessions.",
       "source": "./",
       "skills": "./skills/"
     }

@@ -1,6 +1,6 @@
 ---
 name: orch-lite
-description: "Lightweight multi-agent orchestration skill. Routes every request into one of four states - chat, single background dispatch, worktree orchestration, or agent resume - so the main agent only coordinates while all file-modifying work runs in background child agents. Use when a request involves writing or modifying files, git/build operations, or coordinating multiple child agents."
+description: "Lightweight orchestration skill for coding sessions. Routes every request into one of four states - chat, single background dispatch, worktree orchestration, or agent resume - so the main agent only coordinates while all file-modifying work runs in background child agents (one feature, one branch, one executor). Use when a request involves writing or modifying files, git/build operations, or coordinating multiple child agents."
 ---
 
 # Orch-lite
