@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **CLI renamed: `scripts/multi-agent` -> `scripts/orch-lite`.** The old name
+  read as if this plugin were a multi-agent framework; the CLI now reads as the
+  orch-lite CLI. The script stays extensionless with its `100755` exec bit, and
+  every reference to the script path or command is updated (both SKILL.md files,
+  `references/02-protocol.md`, `hooks/session-init.py`, `tests/run.sh`,
+  `tests/hooks.md`, `.gitattributes`, and the CLI's own usage/help strings).
+  Prose uses of the adjective "multi-agent" (plugin descriptions, Codex's
+  "multi-agent v2" platform feature) are deliberately unchanged.
+
+### Added
+- Executor handbook workspace guard: immediately before the git bootstrap step,
+  the child lists the immediate subdirectories (skipping `node_modules`,
+  `.venv`, `venv`, `vendor`, `target`, `build`, `dist`, `.git`, `.cache`). If any
+  contains a `.git`, the directory is a workspace of existing repos, not a
+  project: do NOT `git init` -- report the project paths to the main session and
+  stop. Rationale: `git rev-parse --is-inside-work-tree` only looks UP the tree,
+  so bootstrapping at a workspace root succeeds and wraps the existing child
+  repos in a new parent repo -- the same family as the stray `/tmp/.git`
+  incident recorded in `DEVLOG.md`. Handbook rule only; no CLI/hook code.
+
 ## 1.3.1 (2026-10-04)
 
 ### Added

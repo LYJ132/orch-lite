@@ -490,7 +490,7 @@ case_si_empty_stdin() {
 case_si_audit_no_cli() {
   local d
   d="$(fresh_copy)" || return 1
-  rm "$d/scripts/multi-agent" || return 1
+  rm "$d/scripts/orch-lite" || return 1
   ( cd "$d" && python3 hooks/session-init.py >o.json ) || return 1
   python3 - "$d" <<'PY'
 import json, sys, pathlib
@@ -558,7 +558,7 @@ case_cli_unwritable_cwd() {
   local d out rc=0
   d="$(unwritable_dir)" || return 1
   # doctor: one human line, exit 0 (the quality bar every command must match)
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)"; rc=$?
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)"; rc=$?
   chmod 755 "$d"
   [ "$rc" -eq 0 ] || { printf 'doctor must exit 0, got %s: %s\n' "$rc" "$out"; return 1; }
   grep -q "(doctor: not a repo)" <<< "$out" || { printf 'doctor human line missing: %s\n' "$out"; return 1; }
@@ -581,7 +581,7 @@ case_doctor() {
   git -C "$dir" init -q -b main || return 1
   git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
   git -C "$dir" -c user.name=ops-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work committed on main" || return 1
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
   grep -q "main-violation: ops-20260912-99" <<< "$out" || { echo "(a) expected main-violation for a direct commit on main"; return 1; }
 
@@ -594,7 +594,7 @@ case_doctor() {
   git -C "$dir" -c user.name=impl-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work on feature branch" || return 1
   git -C "$dir" checkout -q main || return 1
   git -C "$dir" -c user.name=orchestrator-merge -c user.email=orchestrator@local merge -q --no-ff feature/demo -m "Merge feature/demo into main" || return 1
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
   grep -q "main-violation" <<< "$out" && { echo "(b) merge-integrated task commit must NOT surface as main-violation"; return 1; }
   grep -q "doctor: all clear" <<< "$out" || { echo "(b) expected 'doctor: all clear' in the merged-clean repo"; return 1; }
@@ -609,7 +609,7 @@ case_doctor() {
   git -C "$dir/.worktrees/login-fix" add work.txt || return 1
   git -C "$dir/.worktrees/login-fix" -c user.name=login-fix -c user.email=f@l commit -q -m work || return 1
   wt_cli "$dir" worktree merge --feature-id login-fix >/dev/null || return 1
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
   grep -q "stale: login-fix (feature/login-fix is merged into main" <<< "$out" || { echo "(c) expected stale finding for the merged worktree"; return 1; }
 }
@@ -629,7 +629,7 @@ wt_repo() {  # echo a sandbox git repo with one baseline commit on main
 
 wt_cli() {  # $1=repo dir, rest: CLI args — run the CLI with the repo as cwd
   local d="$1"; shift
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" "$@" )
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" "$@" )
 }
 
 case_wt_create_new() {
@@ -708,7 +708,7 @@ case_wt_merge() {
 # --- Python >= 3.9 parseability (the version guards' advertised minimum) ---
 
 case_py39_parse() {
-  # Every *.py (both hooks included) plus the extensionless scripts/multi-agent
+  # Every *.py (both hooks included) plus the extensionless scripts/orch-lite
   # must parse under the Python 3.9 grammar — older interpreters must hit the
   # hooks' one-line stderr guard / CLI's non-zero guard, never a SyntaxError
   # traceback. feature_version checks syntax only, which is exactly the guard
@@ -716,7 +716,7 @@ case_py39_parse() {
   python3 - <<'PY'
 import ast, pathlib, sys
 paths = sorted(set(pathlib.Path(".").glob("*/*.py")))
-paths.append(pathlib.Path("scripts/multi-agent"))
+paths.append(pathlib.Path("scripts/orch-lite"))
 names = {p.name for p in paths}
 assert {"dispatch-validate.py", "session-init.py"} <= names, f"hooks missing from collection: {names}"
 for p in paths:

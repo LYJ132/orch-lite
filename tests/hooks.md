@@ -95,10 +95,10 @@ duplicates).
 The PostToolUse hook was deleted in the hook sweep (方案 A) and its
 registration was removed from `~/.zcode/cli/config.json`. Its duties moved:
 
-- **Dirty-worktree refusal** — already enforced by the CLI: `multi-agent
+- **Dirty-worktree refusal** — already enforced by the CLI: `orch-lite
   worktree remove --task-id` refuses a worktree with uncommitted changes.
 - **Stale-worktree marking / main-commit checks** — now live in the
-  `multi-agent doctor` subcommand (WP6c-1): dirty worktrees, stale worktrees
+  `orch-lite doctor` subcommand (WP6c-1): dirty worktrees, stale worktrees
   (index cross-read) and task_id-authored commits on main, always exit 0;
   `worktree list` additionally flags `[stale]` rows via the same cross-read.
 
@@ -125,7 +125,7 @@ is deleted).
    gate contract constants single-sourced in `dispatch-validate.py`
    (importlib; the load failure path degrades to a generic notice naming no
    field — the regression pin is the `GATE` row in Hook 1's matrix);
-5. **Health** — a probe of `multi-agent doctor`, captured but *tolerated for
+5. **Health** — a probe of `orch-lite doctor`, captured but *tolerated for
    absence*: non-zero exit, empty output, or argparse "invalid choice" /
    "unrecognized" text → the section is skipped silently (the hook stays
    usable against CLI copies that predate doctor). When doctor exists, its
@@ -185,13 +185,13 @@ belong to which platform lives here, since JSON cannot carry comments:
 
 ## Setup notes
 
-- **Python >= 3.9 required** by both hooks and `scripts/multi-agent`. Older
+- **Python >= 3.9 required** by both hooks and `scripts/orch-lite`. Older
   interpreters get a one-line human message on stderr — hooks fail-open
   (exit 0, session unblocked), the CLI exits non-zero. uv users can run any
   script via `uv run --python 3.12 <script>` (documentation only; there is
   no dependency to install).
-- The `multi-agent` CLI script was given its executable bit
-  (`chmod +x scripts/multi-agent`). Without it, `process`-type hooks fail with
+- The `orch-lite` CLI script was given its executable bit
+  (`chmod +x scripts/orch-lite`). Without it, `process`-type hooks fail with
   `Permission denied` — and any three-copy sync (workspace → `~/.zcode` /
   `~/.agents`) must preserve permission bits (`cp -p`), not just file content.
 - Config-file hooks are disabled by default; `~/.zcode/cli/config.json` sets

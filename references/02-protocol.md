@@ -45,7 +45,7 @@ HANDOFF_PLAN from=main to=login-api-fix,regression-tests artifact="After the log
 
 **Forbidden**: child→child task dispatch (must go through main); child committing to main.
 
-**Main-session direct actions beyond reads (bookkeeping carve-out)**: the main session directly runs `git checkout -b feature/<id>`, local integration merges (`git merge --ff-only` / `--no-edit`), `scripts/multi-agent worktree create/list/remove` + `doctor`, and `tests/run.sh` — bookkeeping that creates no new content. Integrator dispatches are retired for local integration: `worktree merge --feature-id` (or the plain git merge it drives) is the main agent's own step, not a dispatched child; pushing remains a dispatched/user action. Every file/content edit and every content commit stays dispatched.
+**Main-session direct actions beyond reads (bookkeeping carve-out)**: the main session directly runs `git checkout -b feature/<id>`, local integration merges (`git merge --ff-only` / `--no-edit`), `scripts/orch-lite worktree create/list/remove` + `doctor`, and `tests/run.sh` — bookkeeping that creates no new content. Integrator dispatches are retired for local integration: `worktree merge --feature-id` (or the plain git merge it drives) is the main agent's own step, not a dispatched child; pushing remains a dispatched/user action. Every file/content edit and every content commit stays dispatched.
 
 ---
 
