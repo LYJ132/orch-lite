@@ -1,29 +1,85 @@
 # Changelog
 
-## 1.3.2 (2026-10-04)
+## 1.3.2 (2026-10-20)
 
 ### Changed
-- **CLI renamed: `scripts/multi-agent` -> `scripts/orch-lite`.** The old name
-  read as if this plugin were a multi-agent framework; the CLI now reads as the
-  orch-lite CLI. The script stays extensionless with its `100755` exec bit, and
-  every reference to the script path or command is updated (both SKILL.md files,
-  `references/02-protocol.md`, `hooks/session-init.py`, `tests/run.sh`,
-  `tests/hooks.md`, `.gitattributes`, and the CLI's own usage/help strings).
-  Prose uses of the adjective "multi-agent" (Codex's "multi-agent v2" platform
-  feature) are deliberately unchanged.
-- Changed: identity descriptions refreshed — four routing states, orchestration wording replaces the multi-agent identity claim.
-- **Doc-drift sweep: 1.3.0's deletions are no longer advertised as live.** In
-  `docs/maintenance.md` the `session-init.py` row now matches 1.3.0 reality
-  (the hook writes nothing; the runtime bootstrap is gone) and the paragraph
-  describing `doctor --compare-dir` is removed with that install-drift check;
-  the Codex `interface.defaultPrompt` no longer offers "index + worktrees"
-  orchestration now that the index is deleted. A new `DRIFT` regression case
-  pins every user-facing artifact (README, `docs/*.md`, both manifests, both
-  skills, `references/*.md`) free of deleted-mechanism tokens, exempting only
-  dated history (`DEVLOG.md`, `CHANGELOG.md`, `docs/plan-1-3-0.md`) and the
-  tokens correct prose still needs (`reuses`, `.orch-lite/`, bare `index`).
+- **Routing converged to three states: `chat`, `task`, `resume`.** The
+  retired `orchestration` state is gone — single-task, multi-task and complex
+  dependencies are all handled by `task`, which is judged in a fixed order
+  (pure conversation → an existing child agent to continue → a delegated
+  executor). The routing line is followed by the orchestration declaration
+  (`任务 @branch`, `[A, B]`, `A → B`, `[A, B] → C`, `[A → C, B → D]`), so
+  parallelism and dependencies are stated explicitly instead of being encoded
+  in a separate routing state. Each task shows its branch.
+- **Isolation is now by construction: every dispatched write task runs in its
+  own worktree.** The retired rule ("dispatch into the primary tree when
+  nothing else is running") is removed. A dispatched read-only task needs no
+  worktree — it writes nothing. The main agent prepares the worktree before
+  the dispatch; if the preparation fails, the dispatch stops and the problem
+  is reported — there is no fallback to writing in the primary tree. The main
+  agent's own bookkeeping (branch creation, integration merges, the worktree
+  CLI) is not a dispatched write task and stays in the primary tree.
+- **The Agent tool's `description` is no longer bound to `feature_id`.** The
+  description describes the task; it is not an internal task identifier.
+  `DESCRIPTION_BINDING`, its validation and its error message are deleted
+  from `hooks/dispatch-validate.py`, and the SessionStart GATE_NOTICE no
+  longer mentions the binding. Resume stays a platform concern — the skill
+  states the intent, not the underlying mechanism.
+- **The executor's git bootstrap is bounded, and enforced by code.** It now
+  reuses an existing repository first (via `git rev-parse --show-toplevel`) and
+  never re-initializes inside a repository subdirectory. A repository is
+  initialized only when the project root is unambiguous and nothing would be
+  overwritten; `.gitignore` keeps its existing content and gains the
+  `.worktrees/` rule only when it is missing; the user's existing project
+  files are never staged or committed to manufacture a baseline. An unclear
+  project root stops the executor and reports — it no longer initializes a
+  repository by guesswork. (These rules moved into the `repo` command — see
+  below; the executor handbook now verifies its workspace instead of
+  hand-rolling a bootstrap.)
+- **The CLI resolves the repository root instead of trusting the current
+  directory.** `PROJECT_ROOT` was `Path.cwd()`, so a CLI call from a
+  repository subdirectory created the worktree in the wrong place. It is now
+  the repository's MAIN working tree (resolved through
+  `git worktree list --porcelain`, with `--show-toplevel` as a fallback), so
+  create / list / remove / merge all act on the right repository from any
+  subdirectory. Outside any repository the CLI fails with an explicit error
+  and creates nothing — it never guesses a project root and never initializes
+  a repository. A failed `git worktree add` no longer leaves a stray feature
+  branch behind, and its message states that the write task must not be
+  dispatched.
+- **The Git-init rules are now code-enforced by a new `repo` CLI command.**
+  The plan's rules were prose in the executor handbook; they are now the
+  behaviour of `scripts/orch-lite repo` (idempotent, runs before
+  `worktree create`): an existing repository is always reused (the main
+  working tree is the root — a nested repository is never created); a
+  repository is initialized only when the project root is unambiguous (the
+  directory holds files, no parent directory holds a repository, and it is
+  not a workspace of existing child repositories); `.gitignore` keeps its
+  content and gains the `.worktrees/` rule only when missing; the user's
+  project files are never staged or committed to manufacture a baseline;
+  an ambiguous project root (an empty directory, a workspace of child
+  repositories) is reported, not guessed. The executor handbook now
+  *verifies* the workspace it was given instead of hand-rolling a
+  bootstrap.
+- **The Git-init rules also had to move earlier in the flow.** With the
+  worktree now prepared by the main agent *before* the dispatch, the
+  repository must already exist at that point — but the bootstrap still
+  lived in the executor handbook, where it ran too late. `repo` closes the
+  gap: the main agent runs it as part of the isolation preparation.
+- **A worktree holds the committed tree only.** Files that are not
+  committed yet do not exist inside a new worktree, so the write task would
+  find them missing. `worktree create` now reports the uncommitted paths in
+  the primary tree instead of letting the child discover the gap mid-task.
+- **The dispatch gate resolves the worktree path against the repository
+  root**, not the process cwd. A session started in a repository
+  subdirectory used to be denied ("worktree does not exist") even though the
+  worktree existed at the root — the same bug class the CLI had. The deny
+  reason now names the project root and states that a write task must have
+  its isolation workspace before it is dispatched.
 
 ### Added
+- **New `repo` CLI command** — the code-level guarantee behind the Git-init
+  rules (see Changed above). Idempotent; runs before `worktree create`.
 - Executor handbook workspace guard: immediately before the git bootstrap step,
   the child lists the immediate subdirectories (skipping `node_modules`,
   `.venv`, `venv`, `vendor`, `target`, `build`, `dist`, `.git`, `.cache`). If any
@@ -33,6 +89,13 @@
   so bootstrapping at a workspace root succeeds and wraps the existing child
   repos in a new parent repo -- the same family as the stray `/tmp/.git`
   incident recorded in `DEVLOG.md`. Handbook rule only; no CLI/hook code.
+  (Superseded by the `repo` command, which now enforces the same rule in
+  code; the handbook keeps a verification step instead of a hand-rolled
+  bootstrap.)
+
+### Removed
+- The `description == feature_id` gate check and the `orchestration` routing
+  state.
 
 ## 1.3.1 (2026-10-04)
 

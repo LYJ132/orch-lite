@@ -25,10 +25,41 @@ ignored, never migrated — the work it recorded lives in git history.
 
 Canonical in SKILL.md ("Worktree Model"); mechanics summary:
 
-- `.worktrees/<feature_id>/` — one git worktree per feature; the child agent's only workplace when concurrency is real (one-sentence isolation rule, SKILL.md invariant 2)
+- `.worktrees/<feature_id>/` — one git worktree per feature; the child agent's ONLY workplace for a **write** task (isolation rule, SKILL.md invariant 2). A **read-only** task needs no worktree — it writes nothing.
 - branch `feature/<feature_id>` — one long-lived branch per feature; merge = integration, not closure; never auto-deleted
 - commit authorship: the child sets `GIT_AUTHOR_NAME=<feature_id>` (+ local email)
 - invariant: at most ONE writable worktree per feature branch (git-enforced; a second create fails with `feature busy`)
+
+### 2.0 Project root resolution & the `repo` command
+
+Every CLI command operates on the **git repository's main working tree**,
+not on the current directory. Invoked from a repository subdirectory or from
+inside a linked worktree, the CLI resolves the main tree and creates /
+queries / removes / merges worktrees there.
+
+`repo` is the code-level guarantee behind the Git-init rules (it runs
+before `worktree create`, because a worktree needs a repository that
+already has a commit):
+
+| Situation | `repo` does |
+|---|---|
+| an existing repository | reuses it (main working tree as the root); never creates a nested repo |
+| a new project directory (has files, no repo above, no child repos) | initializes it, appends the missing `.worktrees/` rule, creates an EMPTY baseline commit (the user's files stay untracked) |
+| a directory holding existing child repositories | **refuses** — a workspace is not a project |
+| an empty directory | **refuses** — not unambiguously a project root |
+| a repository without any commit | **reports** — a worktree needs a valid commit on the base branch |
+
+A directory outside any repository makes the worktree commands fail with an
+explicit error — the CLI never guesses a project root and never initializes
+a repository on its own.
+
+**Worktree preparation failure is a stop condition.** When `worktree create`
+fails, the main agent must stop that write dispatch and report the problem —
+it must never fall back to writing in the primary tree.
+
+**A worktree holds the committed tree only.** Files that are not committed
+yet do not exist inside it, so `worktree create` reports the uncommitted
+paths in the primary tree.
 
 ### 2.1 Merge & conflict flow
 ```
@@ -44,8 +75,13 @@ Worktree isolation prevents concurrent edits from colliding; integration conflic
 
 ---
 
-## 3. Git Ignore (what the executor bootstrap appends)
+## 3. Git Ignore (what `repo` appends)
 ```gitignore
 .worktrees/
 ```
-The executor handbook's git bootstrap appends the missing line only (repo-less cwd pattern).
+The `repo` command appends the missing line only: it preserves the existing
+`.gitignore` content and adds `.worktrees/` only when that rule is not
+already there. It never overwrites the file, and it never stages or commits
+the user's existing project files to manufacture a baseline. The baseline
+commit it creates is EMPTY (it touches only `.gitignore`), because
+`git worktree add <dir> <base>` needs a valid commit on the base branch.

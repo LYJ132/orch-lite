@@ -1,6 +1,6 @@
 ---
 name: orch-lite
-description: "Lightweight orchestration skill for coding sessions. Routes every request into one of four states - chat, single background dispatch, worktree orchestration, or agent resume - so the main agent only coordinates while all file-modifying work runs in background child agents (one feature, one branch, one executor). Use when a request involves writing or modifying files, git/build operations, or coordinating multiple child agents."
+description: "Lightweight orchestration skill for coding sessions. Routes every request into one of three states - chat, task, or resume - so the main agent only coordinates while all file-modifying work runs in background child agents (one feature, one branch, one executor). Use when a request involves writing or modifying files, git/build operations, or coordinating multiple child agents."
 ---
 
 # Orch-lite
@@ -17,7 +17,7 @@ description: "Lightweight orchestration skill for coding sessions. Routes every 
 |---|---|
 | Applicable | A task runs in the background while the user freely submits more; multiple functions needed in parallel; homogeneous concurrency |
 | Not applicable | Needs full distributed scheduling / unlimited autonomy / complex state machine |
-| Default | A one-shot request still dispatches ONE child agent — the main session never does the work itself (invariant 1); it only skips the worktree machinery. **Enable orchestration when a child is already running and a new request arrives, or when the Step-0 decomposition check finds ≥2 independent work items** |
+| Default | A one-shot request still dispatches ONE child agent — the main session never does the work itself (invariant 1). **Split into parallel tasks when the decomposition check finds ≥2 independent work items; state the dependencies explicitly** |
 
 > Unsure → ask the user; OR N1 (silence ≥ 5 min → execute the best plan automatically).
 
@@ -27,18 +27,17 @@ description: "Lightweight orchestration skill for coding sessions. Routes every 
 
 <EXTREMELY-IMPORTANT>
 1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package + `run_in_background: true` (non-blocking background). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
-2. **Isolation has one mechanical criterion.** Dispatch into the primary tree (solo) only when you can confirm nothing else is running — no unreturned dispatch this session and a clean `git worktree list`; otherwise create a worktree (`.worktrees/<feature_id>/`). `main` is never a child's write area. One feature = one long-lived branch. Commit/write-area mechanics: orch-lite-executor skill.
+2. **Isolation is by construction.** Every dispatched **write** task runs in its own worktree (`.worktrees/<feature_id>/`) — no exceptions, no "solo means the primary tree". A dispatched **read-only** task needs no worktree: it writes nothing, so it may read the project directly. `main` is never a child's write area. One feature = one long-lived branch. The main agent's own bookkeeping (branch creation, integration merges, `scripts/orch-lite worktree ...`) is **not** a dispatched write task and stays in the primary tree. Commit/write-area mechanics: orch-lite-executor skill.
 3. **Children never commit on main.** `main` only receives integration merges, made by the main agent.
 4. **Commit incrementally before reporting.** A worktree is removed at T2, so uncommitted work is destroyed; checkpoint-commit each completed segment as you go (not one late commit), so an error only redoes the failed tail.
-5. **Check state before dispatching.** Is a child still running (your own unreturned dispatches + `git worktree list`)? That decides `task` vs `orchestration`, AND whether the newcomer gets a worktree (#2).
-"They are related, I will do them one by one" - related-but-independent work still parallelizes; only a shared file or a true output dependency serializes, because over-parallelism costs one merge while over-serialism costs the whole wall-clock.
+5. **Check state, then declare the plan.** Is a child still running (your own unreturned dispatches + `git worktree list`)? That decides `chat` vs `task` vs `resume`. Then state the orchestration (which tasks, which branches, which dependencies) before dispatching. "They are related, I will do them one by one" - related-but-independent work still parallelizes; only a shared file or a true output dependency serializes, because over-parallelism costs one merge while over-serialism costs the whole wall-clock.
 </EXTREMELY-IMPORTANT>
 
 ---
 
 ## Mental Model
 
-- Main dispatches a child; the child commits as `<feature_id>` in its write area — the primary working tree checked out on its `feature/<feature_id>` branch (solo) or `.worktrees/<feature_id>/` (concurrency).
+- Main dispatches a child; the child commits as `<feature_id>` in its write area — the worktree `.worktrees/<feature_id>/` for a write task, the project tree read-only for a read-only task.
 - One long-lived `feature/<feature_id>` branch per feature; integration is the main agent merging into `main` (never a child).
 - **No state file.** Every fact lives in git (branches, `git worktree list`, `git log/diff`), in the conversation (the dispatch result carries the agent id for resume), or in the platform's own affordances. "Which agent worked on what" = the branch history; "merged or not" = `git branch --merged`; "blocked, and why" = told to the user, recorded only on request.
 
@@ -59,20 +58,41 @@ description: "Lightweight orchestration skill for coding sessions. Routes every 
 
 Only pure conversation / reading files to answer is handled by the main session directly. Interact with the user in the language the user writes in - reports TO the user mirror their language; dispatches and child-facing text stay English.
 
-Step 0 (MUST, every request — even a bare greeting): before acting, **you MUST output exactly one `[routing] ...` line as the first line of every reply** (RFC-2119 MUST — this is the audit trail, not a suggestion), choosing among four states — intent judged by the model, not by keyword heuristics:
-- `[routing] chat → handle directly` — pure conversation (including reading a file to answer); no dispatch. Gate every read by its footprint: narrow reads (path known, ~≤3 files, a specific fact) → the main session reads directly; wide sweeps (unknown locations, many files, whole-directory scanning) → dispatch ONE read-only explore child (`run_in_background: true`) that returns conclusions, not file dumps. A read-only explore child writes nothing — no worktree, branch, or commit — so this is dispatch mechanics, not a new state: the routing states stay as written, and the gate only decides when reading escalates from chat to a read-only dispatch.
-- `[routing] task → single dispatch (run_in_background=true)` — choose this only after the decomposition check below comes back negative: one child agent does the work via the Agent tool with a dispatch package embedded as a fenced JSON block in the **Dispatch Package (MUST template)** shape (next section). Do NOT engage worktree orchestration — per the When-to-Enable default, a single one-shot request uses only a child agent. The main agent must NOT wait: `run_in_background: true` keeps the user unblocked (principle 1).
-- `[routing] orchestration → worktree per feature` — when a child agent is already running and the user submits a new request, when the decomposition check finds ≥2 independent work items (parallel dispatch, one branch each), or multiple different-function agents are needed in parallel (>3 heterogeneous parallel packages need user approval, N11; homogeneous does not).
-- `[routing] resume <fid> (agent_<id>)` — a follow-up order for a feature whose child agent has already returned: wake the owning agent instead of dispatching fresh. Distinct from `task` (a first dispatch).
+Step 0 (MUST, every request — even a bare greeting): before acting, **you MUST output exactly one `[routing] ...` line as the first line of every reply** (RFC-2119 MUST — this is the audit trail, not a suggestion), choosing among **three** states — intent judged by the model, not by keyword heuristics. **Judge them in this order**:
 
-**Resume rule.** A follow-up order for a feature whose child has returned → `SendMessage(to: agent_<id>)` with the four-line SUPERSEDES order (Continuation & Resume) — the agent wakes with its context intact; every dispatch result names the id ("Use SendMessage with to: ... to continue this agent"). Hand off fresh (same `feature_id`, surviving conclusions into `STILL VALID`) only when the agent is worn (3+ orders), stuck, failed, or the id is no longer recoverable. Never chain unrelated features onto one agent. After a dispatch returns, carry the handle in the next routing line — `[routing] resume <fid> (agent_<id>)` is short and salient so compaction summaries keep it; a lost id self-heals via fresh-agent hand-off.
-Choosing between `task` and `orchestration` requires two checks — a state check (verify whether any child agent is still running: your unreturned dispatches this session plus `git worktree list`; never assume from file non-overlap) and a decomposition check. **Parallelism is the default across independent features**: a multi-item or complex request is *expected* to split — disjoint file sets and no named dependency → separate features, dispatched **in parallel**, one agent per feature. Serial needs a stated reason (a real dependency, or the same feature — its agent commits serially). **Unsure → parallel.** Anti-pattern: piling unrelated items onto one agent — it lengthens the agent's context and the user's wait; never chain unrelated features onto one agent. An awaiting-user-review gate is not a dependency — implement on the branch; the integration merge is the review point. This line is the audit trail; skipping it is a protocol violation. When unsure which state applies (chat / task / orchestration / resume), **ask the user** — do not guess (N1: silence ≥ 5 min → execute the best plan automatically).
+1. **Is this pure conversation / reading to answer?** → `[routing] chat → handle directly`. Gate every read by its footprint: narrow reads (path known, ~≤3 files, a specific fact) → the main session reads directly; wide sweeps (unknown locations, many files, whole-directory scanning) → dispatch ONE read-only explore child (`run_in_background: true`) that returns conclusions, not file dumps. A read-only explore child writes nothing — no worktree, branch, or commit — so this is dispatch mechanics, not a new state: the routing states stay as written, and the gate only decides when reading escalates from chat to a read-only dispatch.
+2. **Is there a recent child agent that should continue this exact work?** → `[routing] resume <fid> (agent_<id>)`. A follow-up order for a feature whose child agent has already returned: wake the owning agent instead of dispatching fresh. Distinct from `task` (a first dispatch). Resume rule: `SendMessage(to: agent_<id>)` with the four-line SUPERSEDES order (Continuation & Resume) — the agent wakes with its context intact; every dispatch result names the id ("Use SendMessage with to: ... to continue this agent"). Hand off fresh (same `feature_id`, surviving conclusions into `STILL VALID`) only when the agent is worn (3+ orders), stuck, failed, or the id is no longer recoverable. Never chain unrelated features onto one agent. After a dispatch returns, carry the handle in the next routing line — `[routing] resume <fid> (agent_<id>)` is short and salient so compaction summaries keep it; a lost id self-heals via fresh-agent hand-off.
+3. **Otherwise: does the work need a delegated executor?** → `[routing] task → dispatch (run_in_background=true)`. Any write/modify MUST be delegated (invariant 1). The main agent must NOT wait: `run_in_background: true` keeps the user unblocked (principle 1).
+
+**Immediately after a `task` routing line, output the orchestration declaration** (see the next subsection) — the plan you will execute. A `task` line without a following declaration is an incomplete plan.
+
+**Decomposition & parallelism (inside `task`).** A multi-item or complex request is *expected* to split — disjoint file sets and no named dependency → separate features, dispatched **in parallel**, one agent per feature. Serial needs a stated reason (a real dependency, or the same feature — its agent commits serially). **Unsure → parallel.** Anti-pattern: piling unrelated items onto one agent — it lengthens the agent's context and the user's wait; never chain unrelated features onto one agent. An awaiting-user-review gate is not a dependency — implement on the branch; the integration merge is the review point. Only split when the split actually helps independent execution or parallel progress; a single coherent task stays a single task.
+
+**Isolation for dispatched tasks.** Every dispatched write task gets its own worktree, prepared **before** the dispatch (see "Main Agent Action Table"). If the worktree cannot be prepared, **stop the dispatch and report the problem** — never fall back to writing in the primary tree. Read-only dispatched tasks need no worktree.
+
+This line is the audit trail; skipping it is a protocol violation. When unsure which state applies (chat / task / resume), **ask the user** — do not guess (N1: silence ≥ 5 min → execute the best plan automatically).
 
 **Read hygiene (the main session's own narrow reads):** batch independent read-only commands in parallel; `grep -n` to locate, then read only the needed line range; no recursive greps over large trees from the main session — a search of that shape is the wide sweep the gate dispatches instead.
 
 **Self-repair.** Skipped the `[routing]` line? Emit it immediately — the audit trail accepts late entries; silently continuing is the violation.
 
 **Priority over other workflow skills.** Other installed skills (brainstorming, using-superpowers, ...) may shape the conversation, but they never override execution routing: whatever they conclude, the work still passes Step 0 — output the `[routing]` line first, and any research that installs/configures, any file write, any build is dispatched to a child agent. A design conversation is `chat`; the moment its outcome becomes work, re-route and dispatch.
+
+### Task Orchestration Declaration (MUST, right after the `task` routing line)
+
+State the plan in one compact line. Each task carries its **branch**.
+
+| Syntax | Meaning |
+|---|---|
+| `任务 @<branch>` | a single task |
+| `[A, B]` | A and B may run in parallel |
+| `A → B` | B must wait for A to finish |
+| `[A, B] → C` | C runs only after both A and B finish |
+| `[A → C, B → D]` | two dependency paths advance in parallel: C waits for A, D waits for B |
+
+`A`, `B`, `C`, `D` are task entries (`任务 @<branch>`). Example: `[任务 @feature/login-fix, 任务 @feature/audit] → 任务 @feature/regression`.
+
+A single task is output as `任务 @<branch>` — no extra wrapping. Branches are named `feature/<feature_id>`; the feature id is yours to choose (slug rule `^[a-z0-9][a-z0-9._-]*$`).
 
 ---
 
@@ -86,9 +106,8 @@ Every dispatch prompt has exactly four parts, in order:
    ```json
    {"feature_id": "login-api-fix", "objective": "Fix the 500 error of the login API", "acceptance_criteria": ["login API returns 200"]}
    ```
-   **`feature_id` is the one key**: it names the branch `feature/<feature_id>`, the worktree `.worktrees/<feature_id>/`, the commit author, and the Agent tool's `description` — one string, one meaning (slug rule: `^[a-z0-9][a-z0-9._-]*$`).
-   **The Agent tool's `description` field MUST equal `feature_id`** (gate-enforced binding: it is how the agent is found again for continuation).
-   **`worktree` (optional)**: present — and equal to `.worktrees/<feature_id>`, directory already created — whenever another worker is live. Absent → the child works solo in the primary tree on its branch.
+   **`feature_id` is the one key**: it names the branch `feature/<feature_id>`, the worktree `.worktrees/<feature_id>/`, and the commit author — one string, one meaning (slug rule: `^[a-z0-9][a-z0-9._-]*$`). The Agent tool's `description` is free-form: it describes the task for the human, it is not an internal identifier.
+   **`worktree` (optional)**: present — and equal to `.worktrees/<feature_id>`, directory already created — for every dispatched **write** task. Absent → the task is read-only and reads the project directly (no worktree, no branch, no commit).
    There is **no `role` field** (the dispatch tool — Agent vs Explore — IS the role) and **no `reuses` field** (reuse is `git log feature/<fid>`).
 4. **Context pointers — at most 3 lines**, and only file-unreachable facts (decisions, constraints, paths that exist nowhere on disk). Secrets are read-never-print: never inline a secret in a dispatch. Never re-paste process text — the child pulls everything file-reachable from SKILL.md / references / git log.
 
@@ -98,7 +117,7 @@ Every dispatch prompt has exactly four parts, in order:
 - **Every dispatch package's first instruction to the child is:** `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the handbook is canonical`.
 </EXTREMELY-IMPORTANT>
 
-The gate checks the package's shape (fenced JSON, required fields, background flag, handbook pointer, `description == feature_id`, worktree shape + existence) and nothing else — binding and reuse are conventions the main agent follows when composing. Routing is untouched: the routing states and the 5 invariants above stay exactly as written.
+The gate checks the package's shape (fenced JSON, required fields, background flag, handbook pointer, worktree shape + existence) and nothing else — reuse is a convention the main agent follows when composing. Routing is untouched: the routing states and the 5 invariants above stay exactly as written.
 
 ---
 
@@ -119,14 +138,14 @@ Within the same session, prefer resuming a returned agent (the dispatch result c
 
 ## Main Agent Action Table
 
-**Children never commit on main — they commit only inside their own write area: their worktree, or the primary working tree checked out on their `feature/<feature_id>` branch.** `main` itself is touched by the main agent only, for integration merges.
+**Children never commit on main — they commit only inside their own write area: their worktree (write tasks); a read-only task writes nowhere.** `main` itself is touched by the main agent only, for integration merges and its own bookkeeping.
 
 ### NEW_TASK (user submits a request)
-1. State check: unreturned dispatches this session + `git worktree list` → recover state
-2. Output the **decomposition list**: each work package + file scope. ≥2 disjoint scopes & no dependency → dispatch IN PARALLEL (`run_in_background: true`), one feature each; serial only on a stated reason
+1. State check: unreturned dispatches this session + `git worktree list` → recover state (also decides `task` vs `resume`)
+2. Output the **orchestration declaration**: the tasks, their branches, and their dependencies (one line, syntax above)
 3. Reuse check: `git log feature/<fid>` — feature exists → reuse its branch (same `feature_id`); resume the same agent when the conversation still has it
-4. **T1** (concurrent only): `worktree create --feature-id <fid>` (idempotent — reuses an existing `.worktrees/<fid>/`)
-5. Dispatch the **fenced-JSON package** via Agent (`description=<fid>`, `run_in_background: true`; prompt = JSON block + task-specific context only, never re-pasted process text)
+4. **Isolation preparation (write tasks only)**: `repo` (idempotent — ensures a usable repository exists: reuses an existing one, initializes only when the project root is unambiguous, never overwrites `.gitignore`, stops and reports when the root is unclear) → then `worktree create --feature-id <fid>` (idempotent — reuses an existing `.worktrees/<fid>/`). On failure → **stop this dispatch, report the problem, do NOT fall back to the primary tree**. Read-only tasks skip both steps
+5. Dispatch the **fenced-JSON package** via Agent (`description` = a short human-readable task description, `run_in_background: true`; prompt = JSON block + task-specific context only, never re-pasted process text)
 6. End the turn
 
 ### DONE <fid> (a child reports success)
@@ -149,11 +168,11 @@ Within the same session, prefer resuming a returned agent (the dispatch result c
 
 | Property | Description |
 |---|---|
-| Layout | `.worktrees/<feature_id>/` — one git worktree per feature; the child agent's only workplace when concurrency is real (invariant 2) |
+| Layout | `.worktrees/<feature_id>/` — one git worktree per feature; the child agent's only workplace for a write task (invariant 2) |
 | Branch | `feature/<feature_id>` — one long-lived branch per feature; merge = integration, not closure; never auto-deleted |
 | feature_id | main-inferred, user-confirmed, reused across the feature's work; slug rule `^[a-z0-9][a-z0-9._-]*$` (branch + worktree name) |
 | Commit authorship | the child sets `GIT_AUTHOR_NAME=<feature_id>` (+ local email) so the branch history tells the feature's story |
-| Main-tree protection | primary tree = main only (integration merges); children never commit to main |
+| Main-tree protection | primary tree = main only (integration merges + main-agent bookkeeping); children never commit to main |
 | Invariant | at most ONE writable worktree per feature branch (git-enforced; a second create fails with `feature busy`) |
 
 **Create openings**: ① first work of a feature — `feature/<fid>` does not exist yet, created from `--base` (default `main`); ② later work — branch exists, the worktree attaches; ③ re-dispatch over an existing `.worktrees/<fid>/` — **idempotent reuse** (the real path is printed, nothing created).
@@ -174,15 +193,18 @@ Integration conflicts are surfaced here and decided by the user — no agent-to-
 
 ## CLI Quick Reference (`scripts/orch-lite`)
 
-CLI groups: `worktree` / `doctor` — requires **Python >= 3.9** for the CLI and both hooks (older interpreters print a one-line stderr message; hooks fail-open, the CLI exits non-zero); uv users may run via `uv run --python 3.12 <script>` (docs only, no dependency).
+CLI groups: `worktree` / `repo` / `doctor` — requires **Python >= 3.9** for the CLI and both hooks (older interpreters print a one-line stderr message; hooks fail-open, the CLI exits non-zero); uv users may run via `uv run --python 3.12 <script>` (docs only, no dependency).
 
 | Command | User | Purpose |
 |---|---|---|
+| `repo` | Main, T1 | ensure a usable repository exists (idempotent): reuse an existing one; initialize only when the project root is unambiguous; never overwrite `.gitignore`; stop and report when the root is unclear |
 | `worktree create --feature-id <fid> [--base main]` | Main, T1 | create (or idempotently reuse) `.worktrees/<fid>/` on `feature/<fid>`; refuses only when the branch is checked out elsewhere (`feature busy`); writes no state |
 | `worktree list` | anyone | worktrees under `.worktrees/` grouped by feature branch, plus feature branches with no active worktree (kept, not deleted) |
 | `worktree remove --feature-id <fid> [--force]` | Main, T2 | remove the worktree (refuses if uncommitted unless `--force`); branch untouched |
 | `worktree merge --feature-id <fid> [--into main]` | Main | integrate the feature branch into main (git merge-tree pre-check) |
 | `doctor` | anyone (main, hooks) | hygiene scan: running version, dirty worktrees, stale worktrees whose feature branch is already merged (git worktree list + merged-branch state), feature_id-authored commits made directly on main (first-parent scan); always exits 0 (feeds session-init Health) |
+
+All commands operate on the **git repository root** of the current directory (not the current directory itself) — calling the CLI from a repository subdirectory still creates/queries/removes worktrees at the right place. A worktree command that cannot resolve the repository fails with an explicit error; it never guesses a location.
 
 Full parameters: `./scripts/orch-lite <group> --help`.
 

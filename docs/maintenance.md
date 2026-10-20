@@ -29,7 +29,7 @@ Two supported installation paths (self-hosted marketplace; pick exactly one):
 | Hook | Event | Purpose |
 |---|---|---|
 | `session-init.py` | `SessionStart` | writes nothing (no state file since 1.3.0 — the runtime bootstrap is gone) + render the GATE_NOTICE from the gate constants single-sourced in `dispatch-validate.py` + probe `doctor` (Health) + inject the "5 Invariants", "Request Routing" and "Dispatch Package (MUST template)" sections verbatim from SKILL.md |
-| `dispatch-validate.py` | `PreToolUse` on `Agent\|Task` | enforces N15 by validating the fenced-JSON dispatch block (4 required fields; `feature_id` branch-safe) via the ZCode exit-code contract: pass → silent exit 0, deny → reason on stderr + exit 2, internal error → fail-open exit 0 (never JSON on stdout) |
+| `dispatch-validate.py` | `PreToolUse` on `Agent\|Task` | enforces the dispatch contract by validating the fenced-JSON dispatch block (3 required fields; `feature_id` branch-safe; optional `worktree` shape + existence) via the ZCode exit-code contract: pass → silent exit 0, deny → reason on stderr + exit 2, internal error → fail-open exit 0 (never JSON on stdout). The tool `description` is free-form and is NOT compared with `feature_id`. |
 
 Both idempotent, degrade gracefully, never block.
 

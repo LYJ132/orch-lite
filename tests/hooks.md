@@ -36,7 +36,7 @@ re-sent with the fenced block. Calls whose `run_in_background` is not exactly
 `true` are also **DENIED** — dispatches must be background so the main
 session returns to the user immediately.
 
-Enforces the **1.3.0 target contract** (constants single-sourced in
+Enforces the **target contract** (constants single-sourced in
 `hooks/dispatch-validate.py`; `hooks/session-init.py` renders the SessionStart
 GATE_NOTICE from the same constants): required fields are `feature_id` /
 `objective` / `acceptance_criteria` — `role` and `reuses` are DELETED (the
@@ -44,10 +44,12 @@ dispatch tool IS the role; reuse is `git log feature/<fid>`) and `task_id` is
 gone (`feature_id` is the one key). The `feature_id` slug rule
 (`^[a-z0-9][a-z0-9._-]*$`) is enforced — it names the `feature/<feature_id>`
 branch and the `.worktrees/<feature_id>` worktree. The Agent tool's
-`description` must equal the package's `feature_id` (the binding that makes
-the agent resumable by feature). An optional `worktree` field must equal
-`.worktrees/<feature_id>` and the directory must already exist.
-`instance_id` stays RETIRED — not required, ignored when present.
+`description` is **not** validated: it describes the task, it is not an
+internal task identifier, so it is not required to equal `feature_id`. An
+optional `worktree` field must equal `.worktrees/<feature_id>` and the
+directory must already exist — it is present for every **write** task and
+absent for a read-only task. `instance_id` stays RETIRED — not required,
+ignored when present.
 
 | # | Input | Expected | Actual |
 |---|---|---|---|
@@ -65,12 +67,15 @@ the agent resumable by feature). An optional `worktree` field must equal
 | 1.12 | valid fenced JSON but `run_in_background: false` | exit 2 (foreground reason on stderr, as 1.11) | ✅ |
 | 1.15 | prompt without the handbook-first instruction (no `skills/orch-lite-executor/SKILL.md` line) | exit 2, stderr names the handbook path | ✅ |
 | 1.25 | fenced JSON without `feature_id` | exit 2, stderr: `...required field(s): feature_id` | ✅ |
-| 1.26 | `description` differs from the package's `feature_id` | exit 2, stderr names the `description == feature_id` binding | ✅ |
-| 1.27 | `description` absent from `tool_input` | exit 2 (binding cannot hold) | ✅ |
+| 1.26 | `description` differs from the package's `feature_id` | exit 0, empty stdout (the description is free-form) | ✅ |
+| 1.27 | `description` absent from `tool_input` | exit 0, empty stdout (no binding to violate) | ✅ |
 | 1.28 | `worktree` field of the wrong shape (`.worktrees/some-other-fid`) | exit 2, stderr: `worktree field must be .worktrees/<feature_id>` | ✅ |
 | 1.29 | `worktree` shape right but the directory does not exist in the cwd | exit 2, stderr: `does not exist` | ✅ |
 | 1.30 | `worktree` shape right + directory exists (sandbox cwd) | exit 0, empty stdout | ✅ |
-| ROUTE | SKILL.md Step 0: routing line restated as a MUST; self-repair clause and the `[routing]` states (chat / task / orchestration / resume) intact | assertions on the Request Routing section | ✅ |
+| 1.31 | `worktree` shape right + directory exists at the **repository root**, gate invoked from a repository **subdirectory** | exit 0, empty stdout (the worktree path is resolved against the repo root, not the cwd) | ✅ |
+| ROUTE | SKILL.md Step 0: routing line restated as a MUST; self-repair clause and the `[routing]` states (chat / task / resume) intact; the retired `orchestration` state absent; the orchestration-declaration syntax present | assertions on the Request Routing section | ✅ |
+| ISO | SKILL.md + executor handbook: every dispatched **write** task runs in its own worktree, a read-only task needs none, and a worktree preparation failure never falls back to the primary tree | assertions on both skill files | ✅ |
+| GIT | executor handbook: the git bootstrap reuses an existing repository first, initializes only when the project root is unambiguous, preserves `.gitignore`, never stages the user's files, and stops when the root is unclear | assertions on the executor handbook | ✅ |
 | GATE | session-init output: the `--- Dispatch gate (hook-enforced) ---` notice | rendered from the gate constants; names NO deleted field (`reuses` / `task_id` / `role`), names every gate constant | ✅ |
 
 Hard enforcement (1.4, 1.7, 1.11–1.12) is the design point: the fenced
@@ -79,8 +84,10 @@ absence blocks the call instead of passing through; foreground calls are
 blocked so the main session always returns to the user immediately. When a
 fenced block + background is present it is a dispatch and must satisfy the
 target contract: 3 required fields (1.1–1.2), a slug-legal `feature_id`
-(1.3, 1.10), the `description == feature_id` binding (1.26–1.27), the
-optional-worktree checks (1.28–1.30), and retired `instance_id` ignored (1.6).
+(1.3, 1.10), the optional-worktree checks (1.28–1.30), and retired
+`instance_id` ignored (1.6). The `description` is deliberately **not** part
+of the contract (1.26–1.27) — it describes the task, it is not an internal
+task identifier.
 
 v3 behavior retained (2026-09-12 decision): the hook validates the
 fenced-JSON package only — the MUST template is a prompt-shape requirement
@@ -96,11 +103,11 @@ The PostToolUse hook was deleted in the hook sweep (方案 A) and its
 registration was removed from `~/.zcode/cli/config.json`. Its duties moved:
 
 - **Dirty-worktree refusal** — already enforced by the CLI: `orch-lite
-  worktree remove --task-id` refuses a worktree with uncommitted changes.
+  worktree remove --feature-id` refuses a worktree with uncommitted changes.
 - **Stale-worktree marking / main-commit checks** — now live in the
-  `orch-lite doctor` subcommand (WP6c-1): dirty worktrees, stale worktrees
-  (index cross-read) and task_id-authored commits on main, always exit 0;
-  `worktree list` additionally flags `[stale]` rows via the same cross-read.
+  `orch-lite doctor` subcommand: dirty worktrees, stale worktrees (git
+  worktree list + merged-branch state) and feature_id-authored commits on
+  main, always exit 0; `worktree list` flags the same rows.
 
 No PostToolUse hook is registered anymore; only SessionStart
 (`session-init.py`) and PreToolUse (`dispatch-validate.py`) remain.
@@ -161,6 +168,36 @@ line with exit 0 — the hook never crashes the session.
 The injected contract is byte-identical to the SKILL.md section (verified
 programmatically), so editing SKILL.md is the only way the routing rule
 changes — the hook never drifts from it.
+
+---
+
+## CLI: `scripts/orch-lite` — project-root resolution & isolation preparation
+
+The CLI is not a hook, but the isolation rule it implements is the mechanical
+half of "write tasks always run in their own worktree" — so its behavior is
+pinned by the same suite.
+
+| # | Setup | Expected | Actual |
+|---|---|---|---|
+| WT.1 | repo with a baseline commit, `worktree create --feature-id login-fix` | worktree at `<repo>/.worktrees/login-fix`, branch `feature/login-fix` created from `main` | ✅ |
+| WT.2 | the same command again | `reused:` + the real path + "nothing created", exit 0 (idempotent) | ✅ |
+| WT.3 | the branch is checked out in the main tree | exit 2, stderr: `feature busy` | ✅ |
+| WT.4 | `worktree list` | rows grouped by branch, `[clean]` / `[dirty]` marking | ✅ |
+| WT.5 | `worktree remove` on a dirty worktree | refuses; `--force` removes it; the branch survives | ✅ |
+| WT.6 | `worktree merge` with a clean diff | merges into `main`; the branch survives | ✅ |
+| WT.7 | the CLI invoked from a repository **subdirectory** | the worktree is created/queried at the **repository root**, not in the subdirectory; the idempotent reuse finds it | ✅ |
+| WT.8 | the CLI invoked **outside any repository** | exit non-zero with an explicit "not inside one" error; **nothing** is created (no `.git`, no `.worktrees`) — the CLI never guesses a project root and never initializes a repository | ✅ |
+| WT.9 | a worktree that cannot be prepared (the path is blocked) | exit non-zero with an explicit error; **no feature branch and no worktree are left behind** (a stray branch created by `git worktree add -b` is cleaned up) | ✅ |
+| REPO.1 | `repo` in a new project directory (has files, no repository) | initializes the repository; `.gitignore` keeps its content and gains the `.worktrees/` rule; the user's project files are **not** staged or committed (the baseline commit is empty) | ✅ |
+| REPO.2 | `repo` run twice on the same project | the second run reports "reused existing repository" and does **not** append a second `.worktrees/` rule | ✅ |
+| REPO.3 | `repo` in a directory holding existing child repositories | exit non-zero, reported as a workspace; **no** repository is created there | ✅ |
+| REPO.4 | `repo` in an empty directory | exit non-zero, reported as an unclear project root; **no** repository is created | ✅ |
+| REPO.5 | `repo` in a subdirectory of an existing repository | the parent repository is reused; **no nested repository** is created | ✅ |
+| REPO.6 | `repo` in a repository that has no commit yet | exit non-zero, reported ("no commit yet") — a worktree needs a valid commit on the base branch | ✅ |
+
+The worktree-preparation failure (WT.9) is the load-bearing case: the main
+agent must **stop that write dispatch and report the problem**. There is no
+fallback to writing in the primary tree.
 
 ---
 

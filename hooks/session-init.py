@@ -118,10 +118,9 @@ try:
         + ", ".join(_GATE.REQUIRED_FIELDS) + ", " + _GATE.BACKGROUND_FLAG
         + "=true) and its first instruction must tell the child to read "
         + _GATE.HANDBOOK_PATH
-        + "; the tool description must equal the package's feature_id ("
-        + _GATE.DESCRIPTION_BINDING
-        + "); a concurrent dispatch adds its worktree ("
-        + _GATE.WORKTREE_PREFIX + "<feature_id>, the directory must exist). "
+        + "; a write task adds its worktree ("
+        + _GATE.WORKTREE_PREFIX + "<feature_id>, the directory must exist), "
+        "a read-only task carries no worktree. "
         "Dispatches missing any of this are blocked before they run."
     )
 except Exception:

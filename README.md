@@ -183,7 +183,7 @@ At a high level, Orch-lite does four things:
 
 1. **Dispatches execution** — the main session handles intent, conversation, routing, and decisions; concrete write/execution work is dispatched to background Agents.
 2. **Keeps state in git** — feature branches, worktrees, and branch history track background work independently of any single session (no state file).
-3. **Isolates concurrent work when needed** — Git branches and worktrees keep concurrent tasks from unnecessarily interfering with each other.
+3. **Isolates write work by construction** — every write task runs in its own Git worktree, so concurrent tasks cannot interfere with each other.
 4. **Reuses work and conclusions** — existing Agent sessions and historical task conclusions can be reused instead of repeatedly starting from zero.
 
 <details>
@@ -208,11 +208,13 @@ The branch IS the record: commits (authored by the feature id), products, and in
 
 ### Isolation and parallelism
 
-Git isolation is applied when concurrent work makes it useful:
+Git isolation is applied to every write task by construction:
 
-- A single task can work directly on the relevant feature branch.
-- When another task needs to run concurrently, it can receive its own Git worktree.
-- Child Agents do not integrate directly into `main`; integration remains a controlled step.
+- A write task always runs in its own Git worktree, prepared before the dispatch;
+- A read-only task needs no worktree — it writes nothing;
+- If the worktree cannot be prepared, the dispatch stops and is reported — there is no fallback to writing in the primary tree;
+- The repository is prepared by code, not by prose: an existing one is reused, a new one is created only when the project root is unambiguous, `.gitignore` is never overwritten, and the user's files are never staged to manufacture a baseline;
+- Child Agents do not integrate directly into `main`; integration remains a controlled step;
 - If integration encounters a conflict, the decision can be handed back to the human.
 
 ```text
@@ -465,7 +467,7 @@ Agent 继续
 
 1. **派发执行** — 主会话负责理解意图、对话、路由与决策；具体写入和执行工作交给后台 Agent。
 2. **状态落在 git** — feature 分支、worktree 与分支历史独立记录后台工作，不依赖某一次会话（无状态文件）。
-3. **需要时隔离并行工作** — 通过 Git 分支和 worktree，在并发任务真正需要时隔离工作区。
+3. **按构造隔离写入工作** — 每个写入任务都在独立的 Git worktree 中执行，并发任务因此不会互相干扰。
 4. **复用已有工作与结论** — 优先利用已有 Agent 上下文和历史任务结论，减少重复劳动。
 
 <details>
@@ -490,10 +492,12 @@ Orch-lite 通过两份 Skill 划分职责：
 
 ### 隔离与并行
 
-Git 隔离按实际并发需求启用：
+Git 隔离对每个写入任务都是构造性保证：
 
-- 单个任务可以直接在对应 feature 分支上工作；
-- 当另一个任务需要并行执行时，可以为它建立独立的 Git worktree；
+- 写入任务始终在独立的 Git worktree 中执行，派发前准备好隔离工作区；
+- 只读任务不需要 worktree——它不写任何东西；
+- 隔离工作区准备失败时，派发会停止并上报，不会退回主工作区写入；
+- 仓库准备由代码保证而非文字约定：优先复用已有仓库，只有项目根目录明确时才初始化，不覆盖 `.gitignore`，也不会为了造基线而暂存用户文件；
 - 子 Agent 不直接把结果整合进 `main`，整合保持为受控步骤；
 - 如果整合发生冲突，可以把决策交还给人。
 

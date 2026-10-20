@@ -40,7 +40,7 @@ HANDOFF_PLAN from=main to=login-api-fix,regression-tests artifact="After the log
 | Child→main (report/help) | direct | structured text; report states: `DONE <fid>` / **`STUCK <fid>`** (stuck 3 failed attempts or ~10 min without progress — carries problem, attempts made) / structured failure |
 | Child→child (product handoff) | git | A commits products on `feature/<fid>`; B reads them from the branch history |
 | Child→child (info query) | point-to-point | read-only only |
-| Child→its write area | git | work only in the workspace named for you (no other task running → the working tree on your `feature/<feature_id>` branch, created before the first write; a task running → `.worktrees/<feature_id>/`); commit as `<feature_id>`, never on main |
+| Child→its write area | git | work only in the workspace named for you (a **write** task writes only inside `.worktrees/<feature_id>/`; a **read-only** task writes nothing at all); commit as `<feature_id>`, never on main |
 | Main→worktrees | CLI | `worktree create --feature-id` (T1, idempotent) / `worktree remove --feature-id` (T2) / `worktree merge --feature-id` (integration) |
 
 **Forbidden**: child→child task dispatch (must go through main); child committing to main.
@@ -53,7 +53,9 @@ HANDOFF_PLAN from=main to=login-api-fix,regression-tests artifact="After the log
 
 Moved to SKILL.md "Dispatch Package (MUST template)" — the single authority
 for the package (required `feature_id` / `objective` / `acceptance_criteria`;
-no `role`, no `reuses`; `description == feature_id`; optional `worktree`).
+no `role`, no `reuses`; optional `worktree`, present for every **write** task
+and absent for a read-only task; the tool `description` is free-form and is
+not checked against `feature_id`).
 The gate constants live in `hooks/dispatch-validate.py`; `session-init.py`
 renders the SessionStart notice from them.
 
