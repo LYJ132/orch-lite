@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """PreToolUse hook: validate the fenced-JSON dispatch package in the prompt.
 
-Target contract (1.3.0, single-sourced here): the gate checks the package's
-SHAPE — a fenced-JSON block present and valid, the required fields
-(feature_id / objective / acceptance_criteria), the background flag, the
-handbook-pointer line, the `description == feature_id` binding, and the
+Target contract: the gate checks the package's SHAPE — a fenced-JSON block
+present and valid, the required fields (feature_id / objective /
+acceptance_criteria), the background flag, the handbook-pointer line, and the
 optional `worktree` checks (shape + directory existence). There is no
 `role` (the dispatch tool IS the role) and no `reuses` (reuse is
 `git log feature/<fid>`). The feature_id slug rule keeps it a safe
 branch/worktree name.
+
+The Agent tool's `description` is NOT validated: it describes the task, it is
+not an internal task identifier, so it is not required to equal `feature_id`.
 
 This module is ALSO the single source of the gate contract: hooks/session-init.py
 imports these constants (importlib — the filename carries a hyphen) and renders
@@ -39,6 +41,7 @@ if sys.version_info < (3, 9):
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -47,10 +50,6 @@ from typing import Optional, Tuple
 # Required dispatch-package fields. `role` and `reuses` are deleted: the
 # dispatch tool (Agent vs Explore) is the role; reuse is `git log feature/<fid>`.
 REQUIRED_FIELDS = ("feature_id", "objective", "acceptance_criteria")
-
-# The Agent tool's description binds the agent for resume: it must equal the
-# package's feature_id (one string, one meaning).
-DESCRIPTION_BINDING = "description == feature_id"
 
 # The background flag: dispatches are background calls, exactly true.
 BACKGROUND_FLAG = "run_in_background"
@@ -108,30 +107,48 @@ def _slug_reason(feature_id: str) -> str:
     )
 
 
-def _binding_reason(description, feature_id) -> str:
-    return (
-        "Dispatch rejected: the Agent tool's description must equal the "
-        "package's feature_id (binding: description == feature_id, so the "
-        "agent is resumable by feature) — description %r != feature_id %r"
-        % (description, feature_id)
-    )
-
-
 def _worktree_shape_reason(value) -> str:
     return (
         "Dispatch rejected: the package's worktree field must be "
         + WORKTREE_PREFIX
-        + "<feature_id> (the concurrency worktree created for this feature) "
+        + "<feature_id> (the isolation worktree created for this feature) "
         "— got %r" % (value,)
     )
 
 
 def _worktree_missing_reason(value) -> str:
     return (
-        "Dispatch rejected: worktree %r does not exist in the project cwd — "
-        "create it first (`worktree create --feature-id <fid>`), or drop the "
-        "field to dispatch into the primary tree" % (value,)
+        "Dispatch rejected: worktree %r does not exist in the project root — "
+        "create it first (`worktree create --feature-id <fid>`); a write task "
+        "must have its isolation workspace before it is dispatched" % (value,)
     )
+
+
+def _project_root(cwd: Optional[str]) -> Path:
+    """The repository root the worktree path is resolved against.
+
+    The worktree lives at the repository's MAIN working tree, not at the
+    current directory: a session started in a repository subdirectory must
+    still find `<repo>/.worktrees/<fid>/`. The root is resolved with
+    `git rev-parse --show-toplevel`; when the cwd is not inside a repository
+    (or git is unavailable), the cwd itself is used.
+    """
+    base = Path(cwd) if cwd is not None else Path.cwd()
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(base),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return base
+    if proc.returncode == 0 and proc.stdout.strip():
+        root = Path(proc.stdout.strip())
+        if root.is_dir():
+            return root
+    return base
 
 
 def find_dispatch_block(text: str) -> Optional[str]:
@@ -146,12 +163,11 @@ def find_dispatch_block(text: str) -> Optional[str]:
     return None
 
 
-def evaluate(prompt, run_in_background, description=None, cwd=None):
+def evaluate(prompt, run_in_background, cwd=None):
     """Validate the dispatch package found in `prompt`.
 
     Returns (allowed, reason): (True, "") when the call may proceed,
     (False, reason) with a human-readable deny reason otherwise.
-    `description` is the Agent tool_input description (the binding target);
     `cwd` is the project root the optional worktree path is resolved against.
     """
     block = find_dispatch_block(prompt)
@@ -182,19 +198,16 @@ def evaluate(prompt, run_in_background, description=None, cwd=None):
     if HANDBOOK_PATH not in (prompt or ""):
         return False, MISSING_HANDBOOK_REASON
 
-    # description == feature_id binding: the platform description is how the
-    # agent is found again for continuation; it must carry the feature id.
-    if description != feature_id:
-        return False, _binding_reason(description, feature_id)
-
     # Optional worktree checks: the value must match the feature's worktree
     # shape and the directory must already exist (created by the CLI at T1).
+    # A write task carries the worktree field; a read-only task carries none
+    # and needs no isolation workspace.
     worktree = package.get("worktree")
     if worktree is not None:
         expected = WORKTREE_PREFIX + feature_id
         if worktree != expected:
             return False, _worktree_shape_reason(worktree)
-        base = Path(cwd) if cwd is not None else Path.cwd()
+        base = _project_root(cwd)
         if not (base / worktree).is_dir():
             return False, _worktree_missing_reason(worktree)
 
@@ -216,17 +229,17 @@ def main():
         if not isinstance(tool_input, dict):
             return 0
 
-        # The dispatch package lives in the prompt text; description is the
-        # binding field (compared against the package's feature_id).
+        # The dispatch package lives in the prompt text. The tool description
+        # is free-form (it describes the task); it is not checked against the
+        # package's feature_id.
         prompt = tool_input.get("prompt")
         if not isinstance(prompt, str) or not prompt:
             prompt = tool_input.get("description") or ""
         if not isinstance(prompt, str):
             prompt = str(prompt)
-        description = tool_input.get("description")
 
         allowed, reason = evaluate(
-            prompt, tool_input.get("run_in_background"), description
+            prompt, tool_input.get("run_in_background")
         )
         if allowed:
             return 0  # pass: empty stdout, exit 0 (ZCode exit-code contract)

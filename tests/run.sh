@@ -275,16 +275,17 @@ case_1_15() {
   case "$DV_STDERR" in *skills/orch-lite-executor/SKILL.md*) : ;; *) printf 'deny must name the handbook path\n'; return 1 ;; esac
 }
 
-# --- v8 target contract: description == feature_id binding + worktree checks ---
+# --- worktree checks (the description binding is GONE) ---
 
 case_1_26() {
-  # description != feature_id -> deny (the description binds the agent for resume)
+  # description != feature_id -> ALLOW: the description describes the task,
+  # it is not an internal task identifier, so it is not bound to feature_id.
   dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" true some-other-desc)"
-  expect_deny "description == feature_id"
+  expect_pass
 }
 
 case_1_27() {
-  # description absent from tool_input -> deny (binding cannot hold)
+  # description absent from tool_input -> ALLOW (no binding to violate)
   local ev prompt
   prompt="$(fenced_prompt "$PKG_OK")"
   ev="$(python3 - "$prompt" <<'PY'
@@ -293,7 +294,7 @@ print(json.dumps({"tool_name": "Agent", "tool_input": {"prompt": sys.argv[1], "r
 PY
 )"
   dv_run "$ev"
-  expect_deny "description == feature_id"
+  expect_pass
 }
 
 case_1_28() {
@@ -321,6 +322,19 @@ case_1_30() {
   mkdir -p "$d/.worktrees/probe-1" || return 1
   pkg="{\"feature_id\": \"probe-1\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"worktree\": \".worktrees/probe-1\"}"
   dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
+  expect_pass
+}
+
+case_1_31() {
+  # The worktree path is resolved against the REPOSITORY ROOT, not the
+  # process cwd: a session started in a repository subdirectory must still
+  # find <repo>/.worktrees/probe-1.
+  local d pkg
+  d="$(wt_repo)" || return 1
+  mkdir -p "$d/sub/dir" || return 1
+  mkdir -p "$d/.worktrees/probe-1" || return 1
+  pkg="{\"feature_id\": \"probe-1\", \"objective\": \"o\", \"acceptance_criteria\": [\"a\"], \"worktree\": \".worktrees/probe-1\"}"
+  dv_run_in "$d/sub/dir" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
   expect_pass
 }
 
@@ -354,21 +368,74 @@ PY
 }
 
 case_route_must() {
-  # B: Step 0 routing line is a hard MUST; self-repair clause and the three
-  # routing states stay in the Request Routing section.
+  # B: Step 0 routing line is a hard MUST; self-repair clause and the THREE
+  # routing states (chat / task / resume) stay in the Request Routing section.
+  # The retired "orchestration" state must not come back, and the task mode
+  # must carry the orchestration-declaration syntax.
   python3 - "$SKILL_MD" <<'PY'
 import sys
 src = open(sys.argv[1]).read()
 start = src.index("## Request Routing")
-end = src.index("## ", start + 5)
+end = src.index("\n## ", start + 5)
 section = src[start:end].replace("**", "")
 assert "MUST output exactly one `[routing] ...` line as the first line of every reply" in section, \
     "routing MUST line missing"
 assert "Self-repair." in section, "self-repair clause missing"
 for state in ("[routing] chat → handle directly",
-              "[routing] task → single dispatch",
-              "[routing] orchestration → worktree per feature"):
+              "[routing] task → dispatch",
+              "[routing] resume <fid>"):
     assert state in section, f"routing state missing: {state}"
+# The retired fourth state must be gone from the routing states.
+assert "[routing] orchestration" not in src, "the retired 'orchestration' routing state is back"
+assert "orchestration → worktree per feature" not in src, "stale orchestration routing text"
+# Three states only — the routing decision must name exactly them.
+assert "choosing among three states" in section, "routing must declare exactly three states"
+# The orchestration declaration syntax must be present.
+for token in ("任务 @<branch>", "[A, B]", "A → B", "[A, B] → C", "[A → C, B → D]"):
+    assert token in src, f"orchestration declaration syntax missing: {token}"
+PY
+}
+
+case_isolation_rules() {
+  # The isolation rule is by construction: every dispatched WRITE task gets
+  # its own worktree; a read-only task needs none; a worktree preparation
+  # failure stops the dispatch and never falls back to the primary tree.
+  python3 - "$SKILL_MD" "$SKILL_DIR/skills/orch-lite-executor/SKILL.md" <<'PY'
+import sys
+main_src = open(sys.argv[1]).read()
+exec_src = open(sys.argv[2]).read()
+both = main_src + exec_src
+assert "Every dispatched **write** task runs in its own worktree" in main_src, \
+    "write-task worktree rule missing from the main skill"
+assert "**write** task runs only inside the named worktree" in exec_src, \
+    "write-task worktree rule missing from the executor handbook"
+assert "read-only" in both.lower(), "read-only task rule missing"
+assert "never fall back to writing in the primary tree" in both, \
+    "no-fallback-to-primary-tree rule missing"
+# The retired lazy-isolation wording must be gone.
+assert "Dispatch into the primary tree (solo)" not in both, \
+    "the retired 'solo means primary tree' isolation rule is back"
+assert "no other task running → the working tree" not in both.lower(), \
+    "the retired concurrency-gated workspace rule is back"
+PY
+}
+
+case_git_bootstrap_rules() {
+  # The Git-init rules are CODE-ENFORCED by `scripts/orch-lite repo`, and the
+  # executor handbook points at that command instead of repeating the steps.
+  # The prose must not drift back into a hand-rolled bootstrap.
+  python3 - "$SKILL_DIR/skills/orch-lite-executor/SKILL.md" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+# The handbook defers to the CLI.
+assert "scripts/orch-lite repo" in src, "the executor must defer the bootstrap to the CLI"
+# A hand-rolled bootstrap must not come back.
+assert "git init -b main" not in src, "the hand-rolled git init is back in the handbook"
+assert "printf '.worktrees/" not in src, "the hand-rolled .gitignore append is back in the handbook"
+assert "git add .gitignore" not in src, "the hand-rolled .gitignore staging is back in the handbook"
+# The verify-don't-rebuild rule stays.
+assert "--show-toplevel" in src, "the workspace verification step is missing"
+assert "STOP and report" in src, "the stop-and-report rule is missing"
 PY
 }
 
@@ -490,7 +557,7 @@ case_si_empty_stdin() {
 case_si_audit_no_cli() {
   local d
   d="$(fresh_copy)" || return 1
-  rm "$d/scripts/multi-agent" || return 1
+  rm "$d/scripts/orch-lite" || return 1
   ( cd "$d" && python3 hooks/session-init.py >o.json ) || return 1
   python3 - "$d" <<'PY'
 import json, sys, pathlib
@@ -558,7 +625,7 @@ case_cli_unwritable_cwd() {
   local d out rc=0
   d="$(unwritable_dir)" || return 1
   # doctor: one human line, exit 0 (the quality bar every command must match)
-  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)"; rc=$?
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)"; rc=$?
   chmod 755 "$d"
   [ "$rc" -eq 0 ] || { printf 'doctor must exit 0, got %s: %s\n' "$rc" "$out"; return 1; }
   grep -q "(doctor: not a repo)" <<< "$out" || { printf 'doctor human line missing: %s\n' "$out"; return 1; }
@@ -581,7 +648,7 @@ case_doctor() {
   git -C "$dir" init -q -b main || return 1
   git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
   git -C "$dir" -c user.name=ops-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work committed on main" || return 1
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
   grep -q "main-violation: ops-20260912-99" <<< "$out" || { echo "(a) expected main-violation for a direct commit on main"; return 1; }
 
@@ -594,7 +661,7 @@ case_doctor() {
   git -C "$dir" -c user.name=impl-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work on feature branch" || return 1
   git -C "$dir" checkout -q main || return 1
   git -C "$dir" -c user.name=orchestrator-merge -c user.email=orchestrator@local merge -q --no-ff feature/demo -m "Merge feature/demo into main" || return 1
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
   grep -q "main-violation" <<< "$out" && { echo "(b) merge-integrated task commit must NOT surface as main-violation"; return 1; }
   grep -q "doctor: all clear" <<< "$out" || { echo "(b) expected 'doctor: all clear' in the merged-clean repo"; return 1; }
@@ -609,7 +676,7 @@ case_doctor() {
   git -C "$dir/.worktrees/login-fix" add work.txt || return 1
   git -C "$dir/.worktrees/login-fix" -c user.name=login-fix -c user.email=f@l commit -q -m work || return 1
   wt_cli "$dir" worktree merge --feature-id login-fix >/dev/null || return 1
-  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/multi-agent" doctor)" || { echo "doctor exited non-zero"; return 1; }
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
   grep -q "stale: login-fix (feature/login-fix is merged into main" <<< "$out" || { echo "(c) expected stale finding for the merged worktree"; return 1; }
 }
@@ -629,7 +696,7 @@ wt_repo() {  # echo a sandbox git repo with one baseline commit on main
 
 wt_cli() {  # $1=repo dir, rest: CLI args — run the CLI with the repo as cwd
   local d="$1"; shift
-  ( cd "$d" && python3 "$SKILL_DIR/scripts/multi-agent" "$@" )
+  ( cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" "$@" )
 }
 
 case_wt_create_new() {
@@ -705,10 +772,165 @@ case_wt_merge() {
   [ "$(git -C "$d" show main:work.txt 2>/dev/null)" = "work" ] || { echo "merge content missing on main"; return 1; }
 }
 
+# --- CLI: `repo` — the code-enforced git-init rules ---
+
+case_repo_new_project() {
+  # A new project directory (has files, no repository anywhere) -> the repo
+  # is initialized, .gitignore keeps its content and gains the .worktrees/
+  # rule, and the user's project files are NOT staged or committed.
+  local d out
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  printf 'app code\n' > "$d/app.py"
+  printf 'node_modules\n' > "$d/.gitignore"
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" repo)" \
+    || { echo "repo init failed: $out"; return 1; }
+  grep -q "Repository initialized: $d" <<< "$out" || { echo "init line missing: $out"; return 1; }
+  [ -d "$d/.git" ] || { echo "no repository was created"; return 1; }
+  # .gitignore: the original content survives, the rule is appended
+  grep -qxF "node_modules" "$d/.gitignore" || { echo "the original .gitignore content was lost"; return 1; }
+  grep -qxF ".worktrees/" "$d/.gitignore" || { echo "the .worktrees/ rule was not added"; return 1; }
+  # the user's project files were never staged
+  git -C "$d" ls-files --error-unmatch app.py >/dev/null 2>&1 \
+    && { echo "the user's project file was staged — it must not be"; return 1; }
+  git -C "$d" show --stat --oneline HEAD | grep -q "app.py" \
+    && { echo "the user's project file was committed — it must not be"; return 1; }
+  # a baseline commit exists (git worktree add needs a valid commit)
+  git -C "$d" rev-parse --verify --quiet HEAD >/dev/null || { echo "no baseline commit"; return 1; }
+}
+
+case_repo_idempotent() {
+  # Running it again reuses the repository and does NOT append a second
+  # .worktrees/ rule.
+  local d out
+  d="$(wt_repo)" || return 1
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" repo)" \
+    || { echo "repo on an existing repository failed: $out"; return 1; }
+  grep -q "reused existing repository" <<< "$out" || { echo "reuse line missing: $out"; return 1; }
+  [ "$(grep -c "^\.worktrees/$" "$d/.gitignore" 2>/dev/null || echo 0)" -le 1 ] \
+    || { echo "the .worktrees/ rule was appended twice"; return 1; }
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" repo)" \
+    || { echo "the second repo run failed: $out"; return 1; }
+  grep -q "already present" <<< "$out" || { echo "the second run should not append the rule: $out"; return 1; }
+  [ "$(grep -c "^\.worktrees/$" "$d/.gitignore" 2>/dev/null || echo 0)" -le 1 ] \
+    || { echo "the .worktrees/ rule was appended twice"; return 1; }
+}
+
+case_repo_workspace_guard() {
+  # A directory holding existing child repositories is a WORKSPACE, not a
+  # project: no repository may be created there.
+  local d out rc=0
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  git -C "$d" init -q proj-a || return 1
+  git -C "$d" init -q proj-b || return 1
+  printf 'x\n' > "$d/README.md"
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" repo 2>&1)" || rc=$?
+  [ "$rc" -ne 0 ] || { echo "a workspace must not be initialized: $out"; return 1; }
+  grep -q "workspace" <<< "$out" || { echo "expected a workspace report: $out"; return 1; }
+  [ ! -d "$d/.git" ] || { echo "a repository was created in a workspace — bug"; return 1; }
+}
+
+case_repo_empty_dir() {
+  # An empty directory is not unambiguously a project root -> report, do not
+  # initialize.
+  local d out rc=0
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" repo 2>&1)" || rc=$?
+  [ "$rc" -ne 0 ] || { echo "an empty directory must not be initialized: $out"; return 1; }
+  grep -q "not clear" <<< "$out" || { echo "expected a 'not clear' report: $out"; return 1; }
+  [ ! -d "$d/.git" ] || { echo "a repository was created in an empty dir — bug"; return 1; }
+}
+
+case_repo_parent_repo() {
+  # A directory inside an existing repository -> that repository is reused;
+  # NO nested repository is created.
+  local d out
+  d="$(wt_repo)" || return 1
+  mkdir -p "$d/sub" || return 1
+  printf 'x\n' > "$d/sub/file.txt"
+  out="$(cd "$d/sub" && python3 "$SKILL_DIR/scripts/orch-lite" repo)" \
+    || { echo "repo in a subdirectory of a repository failed: $out"; return 1; }
+  grep -q "reused existing repository" <<< "$out" || { echo "the parent repository must be reused: $out"; return 1; }
+  [ ! -d "$d/sub/.git" ] || { echo "a NESTED repository was created — bug"; return 1; }
+}
+
+case_repo_no_commit() {
+  # A repository without any commit cannot host a worktree -> report clearly
+  # instead of failing later in `worktree create`.
+  local d out rc=0
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  git -C "$d" init -q -b main || return 1
+  printf 'x\n' > "$d/file.txt"
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" repo 2>&1)" || rc=$?
+  [ "$rc" -ne 0 ] || { echo "a commit-less repository must be reported: $out"; return 1; }
+  grep -q "no commit yet" <<< "$out" || { echo "expected a 'no commit yet' report: $out"; return 1; }
+}
+
+# --- CLI: project-root resolution (subdirectory + outside any repo) ---
+
+case_wt_subdir_root() {
+  # Invoked from a repository SUBDIRECTORY, the CLI must operate on the
+  # repository root — the worktree lands in <repo>/.worktrees/, not in the
+  # subdirectory, and the idempotent reuse recognizes it.
+  local d out
+  d="$(wt_repo)" || return 1
+  mkdir -p "$d/sub/dir" || return 1
+  out="$(cd "$d/sub/dir" && python3 "$SKILL_DIR/scripts/orch-lite" worktree create --feature-id login-fix)" \
+    || { echo "create from a subdirectory failed: $out"; return 1; }
+  grep -q "Worktree created: $d/.worktrees/login-fix" <<< "$out" \
+    || { echo "the worktree must be created at the repo root: $out"; return 1; }
+  [ -d "$d/.worktrees/login-fix" ] || { echo "worktree dir missing at the repo root"; return 1; }
+  [ ! -d "$d/sub/dir/.worktrees" ] || { echo "a .worktrees dir was created in the subdirectory"; return 1; }
+  # a second call from the subdirectory must be the idempotent reuse
+  out="$(cd "$d/sub/dir" && python3 "$SKILL_DIR/scripts/orch-lite" worktree create --feature-id login-fix)" \
+    || { echo "reuse from a subdirectory failed: $out"; return 1; }
+  grep -q "^reused: $d/.worktrees/login-fix" <<< "$out" \
+    || { echo "reuse from a subdirectory did not find the worktree: $out"; return 1; }
+  # list from the subdirectory sees the same worktree
+  out="$(cd "$d/sub/dir" && python3 "$SKILL_DIR/scripts/orch-lite" worktree list)" \
+    || { echo "list from a subdirectory failed: $out"; return 1; }
+  grep -q "login-fix  $d/.worktrees/login-fix" <<< "$out" \
+    || { echo "list from a subdirectory did not see the worktree: $out"; return 1; }
+}
+
+case_wt_outside_repo() {
+  # Outside any repository the CLI must fail with an explicit error and must
+  # NOT create anything (no .git, no .worktrees) — it never guesses a project
+  # root and never initializes a repository.
+  local d out rc=0
+  d="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$d")
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" worktree create --feature-id x 2>&1)" || rc=$?
+  [ "$rc" -ne 0 ] || { echo "create outside a repo must fail: $out"; return 1; }
+  grep -q "not inside one" <<< "$out" || { echo "expected an explicit 'not inside a repository' error: $out"; return 1; }
+  [ -z "$(ls -A "$d")" ] || { echo "the CLI must not create anything outside a repo, found: $(ls -A "$d")"; return 1; }
+}
+
+case_wt_prepare_failure() {
+  # A worktree that cannot be prepared must be an explicit, non-zero failure
+  # with a "do not dispatch" guidance — never a silent success and never a
+  # fallback to the primary tree.
+  local d out rc=0
+  d="$(wt_repo)" || return 1
+  # a plain file where the worktree directory must go -> git worktree add fails
+  printf 'blocker\n' > "$d/.worktrees" || return 1
+  out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" worktree create --feature-id login-fix 2>&1)" || rc=$?
+  [ "$rc" -ne 0 ] || { echo "a failed worktree preparation must exit non-zero: $out"; return 1; }
+  grep -qi "worktree" <<< "$out" || { echo "expected a worktree failure message: $out"; return 1; }
+  # the primary tree must be untouched: no feature branch, no worktree added
+  git -C "$d" rev-parse -q --verify refs/heads/feature/login-fix >/dev/null \
+    && { echo "a failed preparation must not create the feature branch"; return 1; }
+  [ "$(git -C "$d" worktree list --porcelain | grep -c '^worktree ')" -eq 1 ] \
+    || { echo "a failed preparation must not register a worktree"; return 1; }
+}
+
 # --- Python >= 3.9 parseability (the version guards' advertised minimum) ---
 
 case_py39_parse() {
-  # Every *.py (both hooks included) plus the extensionless scripts/multi-agent
+  # Every *.py (both hooks included) plus the extensionless scripts/orch-lite
   # must parse under the Python 3.9 grammar — older interpreters must hit the
   # hooks' one-line stderr guard / CLI's non-zero guard, never a SyntaxError
   # traceback. feature_version checks syntax only, which is exactly the guard
@@ -716,7 +938,7 @@ case_py39_parse() {
   python3 - <<'PY'
 import ast, pathlib, sys
 paths = sorted(set(pathlib.Path(".").glob("*/*.py")))
-paths.append(pathlib.Path("scripts/multi-agent"))
+paths.append(pathlib.Path("scripts/orch-lite"))
 names = {p.name for p in paths}
 assert {"dispatch-validate.py", "session-init.py"} <= names, f"hooks missing from collection: {names}"
 for p in paths:
@@ -725,6 +947,88 @@ for p in paths:
     except SyntaxError as e:
         sys.exit(f"{p}: not Python-3.9 parseable: {e}")
 print(f"{len(paths)} files parse under the Python 3.9 grammar")
+PY
+}
+
+# --- 1.3.0 deleted-mechanism sweep over the user-facing artifacts ---
+
+case_no_deleted_mechanism_refs() {
+  # 1.3.0 deleted the state file (.orch-lite/index.json, features.json,
+  # memory.json, hook-policy.json), the index/memory/init CLI groups, the
+  # task_id field, the dispatch role/reuses fields, the SubagentStart hook,
+  # doctor's --compare-dir check and references/01-judgment.md. A surviving
+  # mention in a user-facing artifact is rot: it advertises a mechanism that
+  # no longer exists. Three such drifts reached the 1.3.2 line before this
+  # pin existed -- maintenance.md's session-init row ("idempotent `init` +
+  # inject `index list`") and its --compare-dir paragraph, plus the Codex
+  # defaultPrompt's "index + worktrees" -- all the same failure family as the
+  # manifest descriptions advertising three routing states.
+  #
+  # Dated history is NOT swept: DEVLOG.md, CHANGELOG.md and
+  # docs/plan-1-3-0.md describe 1.3.0 in the past tense and must stay true to
+  # their dates. Everything else that ships to a reader is.
+  #
+  # DELIBERATELY NOT PINNED. Each of these has a legitimate live mention, so a
+  # pattern for it would fail on correct prose -- reported, not forced:
+  #   * `reuses` -- SKILL.md states "no `reuses` field" as active protocol, and
+  #     uses the plain English verb ("the child reuses conclusions"; "reuses an
+  #     existing .worktrees/<fid>/") for the idempotent worktree create.
+  #   * `.orch-lite/`, "state file", "memory" -- references/03-state.md and
+  #     SKILL.md assert their absence in the present tense ("is never created").
+  #   * bare `index` -- an ordinary English word ("Reference Index", "indexed").
+  #     Only the deleted CLI group and the deleted file names are pinned.
+  # If a NEW dated-history doc is added later, add it to DATED_HISTORY here
+  # rather than weakening a pattern.
+  python3 - <<'PY'
+import glob, pathlib, re, sys
+
+DATED_HISTORY = {"DEVLOG.md", "CHANGELOG.md", "docs/plan-1-3-0.md"}
+
+ARTIFACTS = sorted(
+    (
+        set(glob.glob("docs/*.md"))
+        | set(glob.glob(".claude-plugin/*.json"))
+        | set(glob.glob("references/*.md"))
+        | set(glob.glob("skills/*/SKILL.md"))
+        | {"README.md", ".codex-plugin/plugin.json"}
+    )
+    - DATED_HISTORY
+)
+
+for d in sorted(DATED_HISTORY):
+    if not pathlib.Path(d).is_file():
+        sys.exit(f"dated-history exclusion names a missing file: {d}")
+missing = [a for a in ARTIFACTS if not pathlib.Path(a).is_file()]
+if missing:
+    sys.exit(f"artifact list is stale (missing): {missing}")
+
+DEAD = {
+    "state file .orch-lite/index.json": r"index\.json",
+    "state file features.json": r"features\.json",
+    "state file memory.json": r"memory\.json",
+    "state file hook-policy.json": r"hook-policy\.json",
+    "index CLI group (list|show|create|update)": r"\bindex\s+(list|show|create|update)\b",
+    "task_id field": r"\btask_id\b",
+    "\"index + worktrees\" phrasing": r"\bindex\s*\+\s*worktrees?\b",
+    "SubagentStart hook": r"SubagentStart",
+    "doctor --compare-dir check": r"--compare-dir",
+    "deleted reference 01-judgment.md": r"01-judgment",
+}
+
+hits = []
+for name in ARTIFACTS:
+    lines = pathlib.Path(name).read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines, 1):
+        for label, pat in DEAD.items():
+            if re.search(pat, line):
+                hits.append(f"{name}:{i} [{label}] {line.strip()[:110]}")
+
+if hits:
+    sys.exit(
+        "mechanism(s) deleted in 1.3.0 still referenced in a user-facing "
+        "artifact:\n  " + "\n  ".join(hits)
+    )
+print(f"{len(ARTIFACTS)} user-facing artifacts: no 1.3.0 deleted-mechanism token")
 PY
 }
 
@@ -746,13 +1050,16 @@ run_case "1.11   background absent -> deny"               case_1_11
 run_case "1.12   run_in_background=false -> deny"         case_1_12
 run_case "1.15   handbook-first missing -> deny"          case_1_15
 run_case "1.25   feature_id missing -> deny (required)"   case_1_25
-run_case "1.26   description != feature_id -> deny"       case_1_26
-run_case "1.27   description absent -> deny"              case_1_27
+run_case "1.26   description != feature_id -> allow (binding removed)" case_1_26
+run_case "1.27   description absent -> allow (binding removed)"      case_1_27
 run_case "1.28   worktree wrong shape -> deny"            case_1_28
 run_case "1.29   worktree dir missing -> deny"            case_1_29
 run_case "1.30   worktree shape + dir exist -> allow"     case_1_30
+run_case "1.31   worktree path resolved against the repo root (not the cwd)" case_1_31
 run_case "GATE   GATE_NOTICE rendered from gate constants, no deleted fields" case_gate_notice
-run_case "ROUTE  Step 0 routing line is a MUST (B)"       case_route_must
+run_case "ROUTE  Step 0 routing line is a MUST (B), three states" case_route_must
+run_case "ISO    write task -> worktree; read-only -> none; no primary-tree fallback" case_isolation_rules
+run_case "GIT    executor bootstrap: reuse-first, safe init, no .gitignore overwrite" case_git_bootstrap_rules
 run_case "audit  dispatch-validate broken shapes"         case_1_audit_shapes
 run_case "3.3    missing Request Routing -> fallback"     case_3_3
 run_case "3.6    missing Dispatch Package -> fallback"    case_3_6
@@ -765,12 +1072,22 @@ run_case "3.7    session-init unwritable cwd -> fallback, exit 0" case_si_unwrit
 run_case "3.8    CLI unwritable cwd: doctor human line"   case_cli_unwritable_cwd
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
 run_case "PY39  every python file parses as 3.9 (hooks + CLI)"  case_py39_parse
+run_case "DRIFT 1.3.0 deleted mechanisms absent from user-facing artifacts" case_no_deleted_mechanism_refs
 run_case "WT.1   worktree create: new worktree + branch from main" case_wt_create_new
 run_case "WT.2   worktree create: idempotent reuse (reused + real path + note)" case_wt_create_idempotent
 run_case "WT.3   worktree create: branch checked out elsewhere -> feature busy" case_wt_create_busy
 run_case "WT.4   worktree list: grouped rows, clean/dirty (pure git)" case_wt_list
 run_case "WT.5   worktree remove: refuses dirty, --force removes, branch kept" case_wt_remove
 run_case "WT.6   worktree merge: clean merge into main, branch kept" case_wt_merge
+run_case "WT.7   CLI from a repo subdirectory resolves the repo root" case_wt_subdir_root
+run_case "WT.8   CLI outside any repo: explicit error, nothing created" case_wt_outside_repo
+run_case "WT.9   worktree preparation failure: non-zero, primary tree untouched" case_wt_prepare_failure
+run_case "REPO.1 repo: new project -> init, .gitignore preserved, user files NOT staged" case_repo_new_project
+run_case "REPO.2 repo: idempotent, no duplicate .worktrees/ rule" case_repo_idempotent
+run_case "REPO.3 repo: workspace of child repos -> not initialized" case_repo_workspace_guard
+run_case "REPO.4 repo: empty dir (unclear root) -> not initialized" case_repo_empty_dir
+run_case "REPO.5 repo: inside a parent repo -> reused, no nested repo" case_repo_parent_repo
+run_case "REPO.6 repo: no commit yet -> reported, not silently accepted" case_repo_no_commit
 
 printf '%s\n' "${SUMMARY[@]}"
 echo

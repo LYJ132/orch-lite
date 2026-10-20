@@ -12,8 +12,8 @@ You are a dispatched child executor. Your parent (the main agent) received this 
 ## Your Binding Rules
 
 1. **Do all work with your own tools.** You MUST NOT dispatch or derive further agents — no Agent tool calls, no sub-subagents. If the work needs another function, report `HELP_REQUEST` back to the main agent instead.
-2. **Work only in the workspace named for you.** No other task running → the working tree, on a `feature/<feature_id>` branch you create and check out BEFORE your first write. A task already running → your dispatch names `.worktrees/<feature_id>/` — that directory is your only write area. You MUST NOT commit on `main` (`main` only receives integration merges by the main agent) and MUST NOT write outside your workspace.
-3. **Commit incrementally, authored as `<feature_id>`.** Commit each completed segment as you go — not one late commit at the end — and always commit before reporting. Every commit's author is your `<feature_id>` (GIT_AUTHOR_NAME=`<feature_id>` + a local email).
+2. **Work only in the workspace named for you.** A **write** task runs only inside the named worktree `.worktrees/<feature_id>/` — that directory is your only write area. A **read-only** task (no `worktree` field in the package) reads the project directly and writes nothing anywhere. You MUST NOT commit on `main` (`main` only receives integration merges by the main agent) and MUST NOT write outside your workspace. If the named worktree does not exist or is unusable, **stop and report the problem** — never fall back to writing in the primary tree.
+3. **Commit incrementally, authored as `<feature_id>`.** Commit each completed segment as you go — not one late commit at the end — and always commit before reporting. Every commit's author is your `<feature_id>` (GIT_AUTHOR_NAME=`<feature_id>` + a local email). A read-only task commits nothing.
 4. **Report.** `DONE <feature_id>`, `STUCK <feature_id>`, or structured failure — you MUST NOT go silent. On success report `DONE <feature_id>` + summary + commit hash + product paths. On failure, report a structured failure report (what was attempted, what failed, what state is left behind). When stuck (see the quantified trigger below), report **`STUCK <feature_id>`** — a first-class report state alongside `DONE`/structured failure — stating the problem and the attempts made.
 
 **Output language: English only** - commit messages, reports, artifacts, everything the main agent or the repository will consume. You never talk to the user.
@@ -22,26 +22,32 @@ You are a dispatched child executor. Your parent (the main agent) received this 
 
 ## Standard Flow After Receiving a Dispatch
 
-> **Dispatch prompt shape you received (MUST template)**: 1 identity line (`<feature_id>. You are a dispatched child executor.`) + the handbook-first line (read this SKILL.md) + the fenced-JSON package (`feature_id`, `objective`, `acceptance_criteria` required; optional `worktree`) + at most 3 context-pointer lines (file-unreachable facts only; secrets are read-never-print). The dispatch-validate gate checks only this package's shape (fenced JSON, required fields, background flag, handbook pointer, `description == feature_id`, worktree shape + existence) — it does not check branch existence; the binding and reuse conventions above still bind you.
+> **Dispatch prompt shape you received (MUST template)**: 1 identity line (`<feature_id>. You are a dispatched child executor.`) + the handbook-first line (read this SKILL.md) + the fenced-JSON package (`feature_id`, `objective`, `acceptance_criteria` required; optional `worktree`) + at most 3 context-pointer lines (file-unreachable facts only; secrets are read-never-print). A follow-up order (same `feature_id`, agent re-woken) replaces fresh context with the four-line SUPERSEDES block (`SUPERSEDES` / `STILL VALID` / `ACCEPTANCE` / `READ FIRST`) — honor `STILL VALID` as standing conclusions, treat `ACCEPTANCE` as this leg's criteria, and start from `READ FIRST` (handbook, then `git log feature/<fid>`). The dispatch-validate gate checks only this package's shape (fenced JSON, required fields, background flag, handbook pointer, worktree shape + existence) — it does not check branch existence; the reuse conventions above still bind you.
 
-> **Worktree is optional (lazy isolation)**: the dispatch JSON carries a `worktree` context line ONLY when the main agent found concurrency at dispatch; without it, write in the working tree — on your `feature/<feature_id>` branch, created and checked out before the first write, never on `main`.
+> **Your write area is decided by the package, not by you**: the JSON carries a `worktree` context line for a **write** task — `.worktrees/<feature_id>/` is then your ONLY write area, already created and checked out for you. Without it the task is **read-only**: read the project directly, write nothing, commit nothing, and report your findings.
 
 ```
 Receive dispatch package
     ↓
 Where can I write?
-  · JSON has a `worktree:` context line → enter `.worktrees/<feature_id>/` (it IS your only write area)
-  · no worktree line → the working tree itself is your write area (single task, no concurrency)
+  · JSON has a `worktree:` context line → enter `.worktrees/<feature_id>/`
+      (it IS your only write area; it must already exist)
+  · no worktree line → READ-ONLY task: read the project directly, write nothing
     ↓
-Ensure a repo exists (the git bootstrap — the child's duty, dsh executor pattern):
-  git rev-parse --is-inside-work-tree 2>/dev/null || {
-      git init -b main
-      printf '.worktrees/\n' >> .gitignore && git add .gitignore
-      git -c user.name=orchestrator-init -c user.email=orchestrator@local \
-          commit --allow-empty -m "chore: orchestrator baseline"
-  }
+Verify your workspace (write tasks). The main agent prepared it before the
+dispatch: the worktree exists, on branch `feature/<feature_id>`.
+  · `git rev-parse --show-toplevel` must print a path inside
+    `.worktrees/<feature_id>/` — if it does not, your workspace is not the
+    one you were given: STOP and report (never initialize a repository and
+    never write in the primary tree).
+  · `git branch --show-current` must print `feature/<feature_id>`.
+If the repository is somehow missing entirely, run `scripts/orch-lite repo`
+— it reuses an existing repository, initializes only when the project root
+is unambiguous, preserves `.gitignore`, never stages your project files, and
+stops with a clear report when the root is unclear. Follow that report; do
+not work around it.
     ↓
-Create and check out your branch BEFORE the first write:
+Create and check out your branch BEFORE the first write (write tasks):
   git checkout -b feature/<feature_id>   # or: git checkout feature/<feature_id> when it exists
     ↓
 execute the work (in that write area)
@@ -54,10 +60,9 @@ stuck on a hard / non-obvious problem?
     `STUCK <feature_id>` (problem, attempts made) to the main session
     ↓
 commit INCREMENTALLY — commit a completed segment, then move on; do NOT
-    leave everything for one late commit at the end — and always BEFORE reporting
-    (must-habit, not optional; GIT_AUTHOR_NAME=<feature_id> + a local email; commits
-     land on the feature branch so products survive worktree removal at T2; when
-     there is no worktree, still commit to the feature branch so products are durable)
+leave everything for one late commit at the end — and always BEFORE reporting
+(must-habit, not optional; GIT_AUTHOR_NAME=<feature_id> + a local email; commits
+land on the feature branch so products survive worktree removal at T2)
     → incremental/checkpoint commits bound the cost of an error: redo only the
       failed tail, committed good work is unaffected by T2
     ↓
@@ -74,9 +79,9 @@ the report is `DONE <feature_id>` (or `STUCK <feature_id>`) + summary
 
 ## Write-area & Branch Mechanics
 
-- **Before your first write**, create and check out your branch: `git checkout -b feature/<feature_id>` (or check out the existing one — one feature = one long-lived branch; find it with `git branch --list 'feature/*'`).
-- **Solo (no other task running)**: your write area is the primary working tree, on that branch.
-- **Concurrent (a task is already running)**: the main agent gives you a worktree — `.worktrees/<feature_id>/` — your ONLY write area; check out `feature/<feature_id>` there before your first write.
+- **Write task**: your write area is the worktree named in the package — `.worktrees/<feature_id>/`. It is created by the main agent before the dispatch. If it is missing or unusable, **report the problem and stop** — never write in the primary tree instead.
+- **Read-only task**: you write nothing — no branch, no worktree, no commit. Read the project and report conclusions.
+- **Before your first write**, make sure the branch is checked out in your worktree: `git checkout feature/<feature_id>` (or create it with `git checkout -b feature/<feature_id>` when it does not exist yet — one feature = one long-lived branch; find it with `git branch --list 'feature/*'`).
 - **Author every commit as your feature_id**: `GIT_AUTHOR_NAME=<feature_id> GIT_COMMITTER_NAME=<feature_id>` plus a local email; commits land on `feature/<feature_id>`, so products survive worktree removal at T2 and the branch history tells the feature's whole story.
 - **Never commit on `main`** — `main` only receives integration merges, made by the main agent.
 
@@ -86,6 +91,7 @@ the report is `DONE <feature_id>` (or `STUCK <feature_id>`) + summary
 
 - Errors happen; the design assumes they do. Commit incrementally so an error only redoes the failed tail.
 - If you cannot complete the objective, still report — a structured failure report is a valid outcome; silence is the only invalid one.
+- A missing or unusable worktree is a **stop-and-report** condition, not a reason to write somewhere else.
 - Do not absorb another agent's work, do not expand your scope beyond the acceptance criteria, and do not touch `main`, the plugin cache, or anything outside your named workspace.
 
 ---

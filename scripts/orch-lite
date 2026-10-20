@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Extensionless on purpose: this is an executable CLI invoked as `scripts/multi-agent`,
+# Extensionless on purpose: this is an executable CLI invoked as `scripts/orch-lite`,
 # not an importable module -- keep the 100755 exec bit (see .gitattributes: sync tools
 # have stripped it, plus rewritten CRLF, and killed every hook).
 """
@@ -11,9 +11,12 @@ branch feature/<feature_id>, worktree .worktrees/<feature_id>/, git commit
 author (GIT_AUTHOR_NAME=<feature_id>).
 
 Usage:
-    multi-agent <command> [options]
+    orch-lite <command> [options]
 
 Commands:
+    repo                  Ensure a usable git repository exists (idempotent): reuse an
+                          existing one, initialize only when the project root is
+                          unambiguous, never overwrite .gitignore, stop when unclear
     worktree create       Create (or reuse) .worktrees/<feature-id>/ on branch feature/<feature-id>
     worktree list         List worktrees under .worktrees/, grouped by feature branch
     worktree remove       Remove a worktree (never deletes the branch)
@@ -31,7 +34,7 @@ import sys
 # mutation half-understood by an old interpreter is worse than a clean stop).
 if sys.version_info < (3, 9):
     sys.stderr.write(
-        "[orch-lite] multi-agent requires Python >= 3.9 "
+        "[orch-lite] CLI requires Python >= 3.9 "
         "(found %d.%d); refusing to run. Upgrade Python or run via "
         "`uv run --python 3.12 <script>`.\n" % sys.version_info[:2]
     )
@@ -46,16 +49,34 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 # Constants
-PROJECT_ROOT = Path.cwd()
+# PROJECT_ROOT is the repository's MAIN working tree root — NOT the current
+# working directory. It is resolved at command time by _resolve_project_root():
+#   * cwd inside a repo subdirectory  -> the repo root (never the subdirectory)
+#   * cwd inside a linked worktree    -> the MAIN working tree root (the
+#     worktrees live next to the main tree, not inside a worktree)
+#   * cwd outside any repo           -> unresolved: every command that needs a
+#     repository fails with an explicit error. The CLI never guesses a project
+#     root and never initializes a repository on its own.
+CWD = Path.cwd()
+PROJECT_ROOT = CWD
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
+# Where git commands run. Starts at the invocation directory (so git's own
+# repository discovery decides what repository we are in) and is moved to the
+# resolved root once the repository is known.
+GIT_CWD = CWD
 
 
 def _run_git(*git_args: str) -> tuple:
-    """Run a git command in PROJECT_ROOT. Returns (returncode, combined output). Never raises."""
+    """Run a git command in GIT_CWD. Returns (returncode, combined output). Never raises."""
+    return _run_git_in(GIT_CWD, *git_args)
+
+
+def _run_git_in(cwd: Path, *git_args: str) -> tuple:
+    """Run a git command in an explicit directory. Never raises."""
     try:
         proc = subprocess.run(
             ["git", *git_args],
-            cwd=str(PROJECT_ROOT),
+            cwd=str(cwd),
             capture_output=True,
             text=True,
             timeout=30,
@@ -63,6 +84,243 @@ def _run_git(*git_args: str) -> tuple:
         return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, str(exc)
+
+
+def _resolve_project_root() -> Optional[Path]:
+    """The MAIN working tree root of the repository the cwd belongs to, or None.
+
+    `git worktree list --porcelain` lists the main working tree first, in
+    every worktree of the repository — so it answers the question for a cwd
+    that sits in a subdirectory or inside a linked worktree. `--show-toplevel`
+    is the fallback for repositories without the worktree extension.
+    """
+    code, out = _run_git_in(CWD, "worktree", "list", "--porcelain")
+    if code == 0:
+        for line in out.splitlines():
+            if line.startswith("worktree "):
+                path = Path(line[len("worktree "):].strip())
+                if path.is_dir():
+                    return path.resolve()
+    code, out = _run_git_in(CWD, "rev-parse", "--show-toplevel")
+    if code == 0 and out.strip():
+        path = Path(out.strip())
+        if path.is_dir():
+            return path.resolve()
+    return None
+
+
+def _init_project_root() -> bool:
+    """Resolve PROJECT_ROOT / WORKTREES_DIR / GIT_CWD for this invocation.
+
+    Returns False when the cwd belongs to no repository — the caller then
+    reports an explicit error instead of guessing a location.
+    """
+    global PROJECT_ROOT, WORKTREES_DIR, GIT_CWD
+    root = _resolve_project_root()
+    if root is None:
+        return False
+    PROJECT_ROOT = root
+    WORKTREES_DIR = root / ".worktrees"
+    GIT_CWD = root
+    return True
+
+
+# ==================== Repository Bootstrap ====================
+# The Git-init rules are ENFORCED HERE, not left to the model's prose. The
+# executor handbook says what to do; this code guarantees it:
+#
+#   1. REUSE FIRST — an existing repository is always reused. The root is the
+#      repository's main working tree; a nested repo is never created.
+#   2. INIT ONLY WHEN UNAMBIGUOUS — a repository is created only when the
+#      target directory is unambiguously a project root: it holds files, no
+#      parent directory holds a repository, and it is not a workspace of
+#      existing child repositories.
+#   3. NEVER OVERWRITE — .gitignore keeps its content; the .worktrees/ rule
+#      is appended only when missing. The user's project files are never
+#      staged or committed to manufacture a baseline.
+#   4. STOP WHEN UNCLEAR — an ambiguous project root is reported, not guessed.
+#
+# The baseline commit is required: `git worktree add <dir> main` needs a
+# valid commit on the base branch, so a repository without any commit cannot
+# host a worktree. The commit is EMPTY and touches only .gitignore.
+
+_GITIGNORE_RULE = ".worktrees/"
+
+
+def _has_commits() -> bool:
+    """True when HEAD points at a commit (an unborn branch has none)."""
+    code, _ = _run_git("rev-parse", "--verify", "--quiet", "HEAD")
+    return code == 0
+
+
+def _parent_repo_root() -> Optional[Path]:
+    """The root of a repository containing the given directory, or None.
+
+    Looks UP the tree, the way git itself does — a child repository is not
+    "inside" the parent for this purpose, so the check is done on the
+    directory's PARENT, not on the directory itself.
+    """
+    parent = CWD.parent
+    if parent == CWD:  # filesystem root
+        return None
+    code, out = _run_git_in(parent, "rev-parse", "--show-toplevel")
+    if code == 0 and out.strip():
+        return Path(out.strip()).resolve()
+    return None
+
+
+def _child_repos(directory: Path) -> List[Path]:
+    """Immediate subdirectories of `directory` that are git repositories."""
+    found = []
+    try:
+        children = sorted(p for p in directory.iterdir() if p.is_dir())
+    except OSError:
+        return found
+    for child in children:
+        if child.name in (".git", "node_modules", ".venv", "venv", "vendor",
+                          "target", "build", "dist", ".cache"):
+            continue
+        if (child / ".git").exists():
+            found.append(child)
+    return found
+
+
+def _gitignore_has_rule(path: Path) -> bool:
+    """True when .gitignore already carries the .worktrees/ rule."""
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip() == _GITIGNORE_RULE:
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _ensure_gitignore_rule(root: Path) -> str:
+    """Append the .worktrees/ rule to .gitignore, preserving its content.
+
+    Returns a one-line description of what happened. The file is never
+    overwritten; the rule is appended only when it is missing.
+    """
+    gitignore = root / ".gitignore"
+    if gitignore.exists() and _gitignore_has_rule(gitignore):
+        return "gitignore: .worktrees/ rule already present (not appended)"
+    try:
+        existing = gitignore.read_text(encoding="utf-8", errors="replace") if gitignore.exists() else ""
+        with gitignore.open("a", encoding="utf-8") as fh:
+            if existing and not existing.endswith("\n"):
+                fh.write("\n")
+            fh.write(_GITIGNORE_RULE + "\n")
+    except OSError as exc:
+        return "gitignore: could not update (%s)" % exc
+    return "gitignore: .worktrees/ rule appended (existing content preserved)"
+
+
+def repo_command(args):
+    """Ensure a usable git repository exists for the project (idempotent).
+
+    This is the code-level guarantee behind the executor's bootstrap rules:
+
+      * an existing repository is REUSED (the main working tree is the root;
+        no nested repository is ever created);
+      * a repository is INITIALIZED only when the project root is
+        unambiguous — the directory holds project files, no parent directory
+        holds a repository, and it is not a workspace of existing child
+        repositories;
+      * .gitignore keeps its content and gains the .worktrees/ rule only
+        when missing; the user's project files are never staged or
+        committed to manufacture a baseline;
+      * an ambiguous project root is REPORTED, never guessed.
+
+    Idempotent: running it twice reports the second run as "reused".
+    """
+    # (1) REUSE FIRST — an existing repository always wins.
+    if _init_project_root():
+        note = "reused existing repository"
+        if not _has_commits():
+            print("Error: the repository at %s has no commit yet" % PROJECT_ROOT)
+            print("Hint: `git worktree add` needs a valid commit on the base branch. "
+                  "Make one first (an empty commit is enough) and retry.")
+            return 1
+        print("Repository: %s (%s)" % (PROJECT_ROOT, note))
+        print("  .gitignore: %s" % _ensure_gitignore_rule(PROJECT_ROOT))
+        print("Note: feature branches are long-lived; never delete the branch when done.")
+        return 0
+
+    # (2) No repository at all — is the project root unambiguous?
+    root = CWD.resolve()
+    entries = [p for p in root.iterdir() if p.name != ".git"] if root.is_dir() else []
+    if not entries:
+        print("Error: the project root is not clear — %s is empty" % root)
+        print("Hint: an empty directory is not unambiguously a project root. "
+              "Point the session at the project directory, or initialize the "
+              "repository yourself, then retry.")
+        return 1
+
+    parent_root = _parent_repo_root()
+    if parent_root is not None:
+        print("Error: the project root is not clear — %s is inside the repository "
+              "at %s, but that repository was not detected from this directory"
+              % (root, parent_root))
+        print("Hint: run the command from inside %s, or from the repository root."
+              % parent_root)
+        return 1
+
+    child_repos = _child_repos(root)
+    if child_repos:
+        print("Error: the project root is not clear — %s is a workspace of existing "
+              "repositories:" % root)
+        for child in child_repos[:5]:
+            print("  - %s" % child.name)
+        print("Hint: this is a workspace, not a project — do NOT initialize a "
+              "repository here (it would wrap those repositories in a new parent). "
+              "Run the command in the project directory instead.")
+        return 1
+
+    # (3) Unambiguous project root -> initialize.
+    code, out = _run_git_in(root, "init", "-b", "main")
+    if code != 0:
+        # Older git has no `init -b`; retry without it.
+        code, out = _run_git_in(root, "init")
+        if code != 0:
+            print("Error: git init failed: %s" % out)
+            return 1
+    if not _init_project_root():
+        print("Error: the repository was created but its root could not be resolved")
+        return 1
+
+    gitignore_note = _ensure_gitignore_rule(root)
+
+    # The baseline commit is EMPTY and touches only .gitignore: the user's
+    # project files are never staged. `git worktree add <dir> main` needs a
+    # valid commit on the base branch.
+    staged = []
+    try:
+        code, out = _run_git("status", "--porcelain")
+        if code == 0:
+            staged = [l for l in out.splitlines() if l.strip()]
+    except OSError:
+        staged = []
+    add_code, add_out = _run_git("add", ".gitignore")
+    if add_code != 0:
+        print("Error: could not stage .gitignore: %s" % add_out)
+        return 1
+    commit_code, commit_out = _run_git(
+        "-c", "user.name=orchestrator-init", "-c", "user.email=orchestrator@local",
+        "commit", "-q", "--allow-empty", "-m", "chore: orchestrator baseline",
+    )
+    if commit_code != 0:
+        print("Error: baseline commit failed: %s" % commit_out)
+        return 1
+
+    print("Repository initialized: %s" % PROJECT_ROOT)
+    print("  branch:   main (created)")
+    print("  %s" % gitignore_note)
+    print("  baseline: empty commit (your project files were NOT staged)")
+    if staged:
+        print("Note: %d untracked path(s) left untouched, as they should be." % len(staged))
+    print("Note: feature branches are long-lived; never delete the branch when done.")
+    return 0
 
 
 # ==================== Worktree Commands ====================
@@ -78,12 +336,18 @@ _MERGE_TREE_FILE_RE = re.compile(r"^\s+(base|our|their|result)\s+(\d{6})\s+([0-9
 
 
 def _require_git_repo(action: str) -> bool:
-    """True when cwd is inside a git repository; otherwise print an error + hint."""
-    code, _ = _run_git("rev-parse", "--git-dir")
-    if code != 0:
-        print(f"Error: {action} requires a git repository, but this is not one")
-        print("Hint: bootstrap one first (git init -b main + a baseline commit; "
-              "see the orch-lite-executor handbook, git bootstrap steps)")
+    """True when the cwd belongs to a git repository; otherwise print an error + hint.
+
+    Resolving the project root is part of the check: the worktree commands all
+    operate on the repository's MAIN working tree, never on the current
+    directory. A cwd outside any repository is an explicit, reported failure —
+    the CLI never guesses a project root and never initializes a repository.
+    """
+    if not _init_project_root():
+        print(f"Error: {action} requires a git repository, but this directory is not inside one")
+        print("Hint: run the command from inside the project repository (any subdirectory "
+              "works — the repository root is resolved automatically). The CLI does not "
+              "initialize a repository on its own.")
         return False
     return True
 
@@ -122,11 +386,26 @@ def _worktree_status(dir_path: Path):
 
 
 def _registered_worktree_paths() -> Optional[set]:
-    """Absolute paths registered with git (`worktree list --porcelain`), or None on git failure."""
+    """Absolute paths registered with git (`worktree list --porcelain`), or None on git failure.
+
+    Both the raw and the resolved form of every path are kept: git prints the
+    path as registered, while PROJECT_ROOT is resolved — the two can differ
+    behind a symlink, and the worktree-reuse check compares them.
+    """
     code, out = _run_git("worktree", "list", "--porcelain")
     if code != 0:
         return None
-    return {line[len("worktree "):].strip() for line in out.splitlines() if line.startswith("worktree ")}
+    paths = set()
+    for line in out.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        raw = line[len("worktree "):].strip()
+        paths.add(raw)
+        try:
+            paths.add(str(Path(raw).resolve()))
+        except OSError:
+            pass
+    return paths
 
 
 def _parse_merge_tree_conflicts(out: str):
@@ -225,20 +504,66 @@ def worktree_create(args):
         # Case B: branch exists but checked out nowhere -> attach the new worktree to it
         code, out = _run_git("worktree", "add", str(wt_dir), branch)
         how = f"attached existing branch {branch}"
+        created_branch = False
     else:
         # Case A: one step -- create the branch from base and check it out in the new worktree
         code, out = _run_git("worktree", "add", "-b", branch, str(wt_dir), args.base)
         how = f"created branch {branch} from {args.base}"
+        created_branch = True
 
     if code != 0:
+        # Isolation preparation failed: the caller (main agent) must STOP the
+        # write dispatch and report this. It must never fall back to writing
+        # in the primary tree — the error is explicit and exits non-zero.
+        # `git worktree add -b` creates the branch BEFORE the checkout, so a
+        # failure can leave a stray branch behind: remove it again, otherwise
+        # the next attempt would attach to a half-initialized feature.
+        if created_branch and _branch_exists(branch):
+            _run_git("branch", "-D", branch)
         print(f"Error: git worktree add failed: {out}")
+        print(f"Guidance: the write task must not be dispatched — its isolation "
+              f"workspace could not be prepared. Fix the cause and retry; do not "
+              f"write in the primary tree instead.")
         return 1
 
     print(f"Worktree created: {wt_dir}")
     print(f"  feature:  {args.feature_id}")
     print(f"  branch:   {branch} ({how})")
+    # A worktree holds the COMMITTED tree only: files that are not committed
+    # yet do not exist inside it. The child would find them missing, so the
+    # condition is reported here rather than discovered mid-task.
+    untracked = _untracked_paths()
+    if untracked:
+        print(f"Warning: {len(untracked)} uncommitted path(s) in the primary tree are "
+              f"NOT present in the worktree:")
+        for path in untracked[:5]:
+            print(f"  - {path}")
+        if len(untracked) > 5:
+            print(f"  ... and {len(untracked) - 5} more")
+        print("Guidance: commit them on the base branch first if the task needs them.")
     print("Note: feature branches are long-lived; never delete the branch when done.")
     return 0
+
+
+def _untracked_paths() -> List[str]:
+    """Paths in the primary tree that are not committed (and not ignored).
+
+    They will NOT exist inside a new worktree — the worktree holds the
+    committed tree only. The list is advisory, used to warn the caller.
+    """
+    code, out = _run_git("status", "--porcelain", "--untracked-files=normal")
+    if code != 0:
+        return []
+    paths = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        # "??" = untracked; " M"/"A " etc. are modifications of tracked files
+        # (those are also absent from a fresh worktree, but the common case
+        # by far is the untracked project file).
+        if line.startswith("??"):
+            paths.append(line[3:].strip())
+    return paths
 
 
 def worktree_list(args):
@@ -338,7 +663,10 @@ def worktree_merge(args):
     feature = WORKTREE_BRANCH_PREFIX + args.feature_id
     into = args.into
 
-    # Must run from the main working tree (git-dir == git-common-dir there)
+    # The merge runs in the MAIN working tree: _require_git_repo resolved
+    # PROJECT_ROOT/GIT_CWD to it (the main tree is always the first entry of
+    # `git worktree list`), so a subdirectory or a worktree cwd still merges
+    # into the main tree's checkout instead of the worktree's.
     _, git_dir = _run_git("rev-parse", "--git-dir")
     _, common_dir = _run_git("rev-parse", "--git-common-dir")
     if os.path.abspath(git_dir.strip()) != os.path.abspath(common_dir.strip()):
@@ -457,8 +785,14 @@ def doctor_command(args):
     is already merged into main, (2) feature_id-authored commits made
     directly on main (a first-parent scan, so merge-integrated feature
     commits do not surface), plus the merged-branch state. Always exits 0."""
-    code, _ = _run_git("rev-parse", "--is-inside-work-tree")
+    code, _ = _run_git_in(CWD, "rev-parse", "--is-inside-work-tree")
     if code != 0:
+        print("(doctor: not a repo)")
+        return 0
+    # Resolve the project root so the worktree hygiene scan looks at the
+    # repository's MAIN working tree, even when doctor runs from a
+    # subdirectory. A cwd outside any repository keeps the human line above.
+    if not _init_project_root():
         print("(doctor: not a repo)")
         return 0
 
@@ -539,6 +873,13 @@ def main():
     merge_wt.add_argument("--feature-id", required=True, help="Feature ID -> branch feature/<feature-id>")
     merge_wt.add_argument("--into", default="main", help="Target branch (default: main)")
 
+    # repo
+    subparsers.add_parser(
+        "repo",
+        help="Ensure a usable git repository exists for the project (idempotent): "
+             "reuse an existing one, initialize only when the project root is "
+             "unambiguous, never overwrite .gitignore, stop when the root is unclear")
+
     # doctor
     subparsers.add_parser(
         "doctor",
@@ -568,6 +909,8 @@ def _dispatch(args, parser) -> int:
             return worktree_remove(args)
         elif args.worktree_cmd == "merge":
             return worktree_merge(args)
+    elif args.command == "repo":
+        return repo_command(args)
     elif args.command == "doctor":
         return doctor_command(args)
 

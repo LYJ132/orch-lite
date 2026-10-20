@@ -11,7 +11,7 @@ own location (`__file__`) — zero hardcoded absolute paths. On session start:
    and inject each as its own labeled part.
 3. Render the GATE_NOTICE from the gate contract constants single-sourced in
    dispatch-validate.py (importlib — the filename carries a hyphen).
-4. Probe `multi-agent doctor` (Health). A non-zero doctor exit with
+4. Probe `orch-lite doctor` (Health). A non-zero doctor exit with
    argparse-style "invalid choice"/"unrecognized" output means the
    subcommand is absent and the section is skipped silently; an empty
    output is likewise skipped. The hook writes nothing: 1.3.0 has no state
@@ -58,7 +58,7 @@ from typing import List, Tuple
 # skill root. Everything (CLI, SKILL.md) is resolved from here — the skill
 # works no matter where it is installed.
 SKILL_DIR = Path(__file__).resolve().parent.parent
-CLI = SKILL_DIR / "scripts" / "multi-agent"
+CLI = SKILL_DIR / "scripts" / "orch-lite"
 # Plugin layout keeps SKILL.md at skills/orch-lite/SKILL.md; the legacy flat
 # skill layout had it at the root. Prefer the plugin layout, fall back to flat.
 _SKILL_MD_CANDIDATES = (
@@ -88,7 +88,7 @@ DOCTOR_ABSENT_MARKERS = ("invalid choice", "unrecognized")
 # cwd once injected a raw PermissionError traceback via the CLI's stderr).
 TRACEBACK_MARKERS = ("Traceback", 'File "', "PermissionError")
 # Final line of a raw Python traceback for an OS error, e.g.
-# "PermissionError: [Errno 13] Permission denied: '/home/x/multi-agent'" --
+# "PermissionError: [Errno 13] Permission denied: '/home/x/orch-lite'" --
 # reduced to path + reason, the exception machinery itself is dropped.
 _ERRNO_EXC_RE = re.compile(
     r"^[A-Za-z_][\w.]*(?:Error|Exception): \[Errno \d+\] (.+): '(.+)'$"
@@ -118,10 +118,9 @@ try:
         + ", ".join(_GATE.REQUIRED_FIELDS) + ", " + _GATE.BACKGROUND_FLAG
         + "=true) and its first instruction must tell the child to read "
         + _GATE.HANDBOOK_PATH
-        + "; the tool description must equal the package's feature_id ("
-        + _GATE.DESCRIPTION_BINDING
-        + "); a concurrent dispatch adds its worktree ("
-        + _GATE.WORKTREE_PREFIX + "<feature_id>, the directory must exist). "
+        + "; a write task adds its worktree ("
+        + _GATE.WORKTREE_PREFIX + "<feature_id>, the directory must exist), "
+        "a read-only task carries no worktree. "
         "Dispatches missing any of this are blocked before they run."
     )
 except Exception:
@@ -159,13 +158,13 @@ def _render_cli(label: str, args: List[str], default_body: str,
                 code: int, out: str) -> str:
     """Render one CLI-derived section with fail-soft fallback.
 
-    Success → '--- <label> (multi-agent <args>) ---' plus the CLI output.
+    Success → '--- <label> (orch-lite <args>) ---' plus the CLI output.
     Failure (non-zero exit or traceback-shaped text) → the single human line
     '--- <label> (skipped: <reason>) ---'.
     """
     out = (out or "").strip()
     if code == 0 and not _has_traceback_markers(out):
-        return "--- %s (multi-agent %s) ---\n%s" % (
+        return "--- %s (orch-lite %s) ---\n%s" % (
             label, " ".join(args), out or default_body
         )
     return "--- %s (skipped: %s) ---" % (label, _failure_detail(out, code))
@@ -197,7 +196,7 @@ def run_cli(args: List[str], timeout: int = 15) -> Tuple[int, str]:
 
 
 def health_section() -> str:
-    """`multi-agent doctor` output as the Health section, or '' when there is
+    """`orch-lite doctor` output as the Health section, or '' when there is
     nothing to report.
 
     Absence (argparse usage/error text on a non-zero exit) or empty output is

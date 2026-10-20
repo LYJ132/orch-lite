@@ -8,4 +8,4 @@
 *.md text eol=lf
 *.json text eol=lf
 # Extensionless CLI script (no suffix for the glob rules above to match).
-scripts/multi-agent text eol=lf
+scripts/orch-lite text eol=lf
