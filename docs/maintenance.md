@@ -37,7 +37,7 @@ Both idempotent, degrade gracefully, never block.
 
 ## Development & Maintenance
 
-Process documents (changelog, open questions P1–P8, design decisions) live **outside the skill** in `PROGRAMS/docs/lo-meta/` — not read at runtime.
+Process documents (changelog, open questions, design decisions) live **outside the skill** in `PROGRAMS/docs/lo-meta/` — not read at runtime. That directory is outside this repository: the shipped skill carries no numbered-decision or open-question references, so a reader of the plugin never has to resolve an identifier that the repository does not define.
 
 ### Deployment rules (each was a real silent failure)
 

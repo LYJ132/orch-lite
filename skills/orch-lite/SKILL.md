@@ -19,7 +19,7 @@ description: "Lightweight orchestration skill for coding sessions. Routes every 
 | Not applicable | Needs full distributed scheduling / unlimited autonomy / complex state machine |
 | Default | A one-shot request still dispatches ONE child agent — the main session never does the work itself (invariant 1). **Split into parallel tasks when the decomposition check finds ≥2 independent work items; state the dependencies explicitly** |
 
-> Unsure → ask the user; OR N1 (silence ≥ 5 min → execute the best plan automatically).
+> Unsure → ask the user; OR, if the user has gone silent for ≥ 5 minutes, execute the best recoverable plan automatically.
 
 ---
 
@@ -70,7 +70,7 @@ Step 0 (MUST, every request — even a bare greeting): before acting, **you MUST
 
 **Isolation for dispatched tasks.** Every dispatched write task gets its own worktree, prepared **before** the dispatch (see "Main Agent Action Table"). If the worktree cannot be prepared, **stop the dispatch and report the problem** — never fall back to writing in the primary tree. Read-only dispatched tasks need no worktree.
 
-This line is the audit trail; skipping it is a protocol violation. When unsure which state applies (chat / task / resume), **ask the user** — do not guess (N1: silence ≥ 5 min → execute the best plan automatically).
+This line is the audit trail; skipping it is a protocol violation. When unsure which state applies (chat / task / resume), **ask the user** — do not guess (if the user has gone silent for ≥ 5 minutes, execute the best recoverable plan automatically).
 
 **Read hygiene (the main session's own narrow reads):** batch independent read-only commands in parallel; `grep -n` to locate, then read only the needed line range; no recursive greps over large trees from the main session — a search of that shape is the wide sweep the gate dispatches instead.
 

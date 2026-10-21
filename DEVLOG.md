@@ -158,6 +158,51 @@ decisions + injected contracts; executor skill = child mechanics;
 platform-enforced behaviors are never written. When the owner requests a
 change, ask which audience it targets BEFORE writing.
 
+### 2026-10-21 · `doctor`'s main-violation scan was blind to the current feature_id (P0)
+
+**What was wrong.** The scan matched `TASK_AUTHOR_RE = ^[a-z]+-[0-9]{8}-[0-9]+$`
+— the pre-1.3.0 `{role}-{YYYYMMDD}-{seq}` task_id shape. Since 1.3.0 the
+feature_id is a slug (`^[a-z0-9][a-z0-9._-]*$`), so the pattern matched
+NOTHING: a child committing straight to `main` was reported as
+`doctor: all clear`. The scan was green on a branch-discipline violation.
+
+**Why the test did not catch it.** `tests/run.sh` used the OLD author shape
+(`ops-20260912-99`), so the case passed while the real shape failed. A test
+that only exercises a shape the production code no longer produces pins
+nothing. Lesson: when a key's shape changes, the test fixture must change
+with it — and the test must exercise the CURRENT shape explicitly.
+
+**Why a single regex cannot fix it.** The obvious fix — "match the feature_id
+slug rule" — over-corrects: a human's plain name (`linyujian`, `LYJ132`)
+also matches the slug rule. Measured on this repository: 26 real
+direct-to-main child commits vs. human commits by the owner, and the two
+sets are indistinguishable by shape.
+
+**The three signals that actually separate them** (all now in
+`scripts/orch-lite`):
+1. **Merge commits are never violations.** A legitimate `--no-ff`
+   integration puts the feature's commits on the SECOND parent; a child's
+   own commit on the FIRST parent chain is the violation. So: more than
+   one parent → skip.
+2. **The owner's own git identity is never a violation.** `git config
+   user.name` / `user.email`, plus the identities seen on recent history
+   with a non-local email, are the human.
+3. **A local email means a child.** Children commit as
+   `<feature_id>@local` / `<feature_id>@orch-lite.local` (and sometimes
+   `child@local`); the owner commits with a real address. The author's
+   name matching the email's local part is the child's own naming.
+
+Verified on the real repository: 26 violations reported (exactly the 26
+single-parent feature_id commits in the last 30 first-parent entries), zero
+false positives on the owner's commits.
+
+**Cross-reference.** The dsh-orch-lite review (2026-10-21) found this
+independently and rated it P0. Its DSH port had already moved to a
+composite check (`email.endsWith('@orch-lite.local') && SLUG.test(author)`);
+the reasoning above reaches the same place from the upstream data, with the
+email-local-part signal as the extra piece.
+
+
 ## Pain log
 
 ### OPEN · 2026-09-17 · hooks.json `_sections` rejected by Codex strict validation

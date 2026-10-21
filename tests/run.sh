@@ -242,16 +242,6 @@ case_1_9() {
 }
 
 case_1_10() {
-  # branch-safe feature_id + existing feature branch -> allow (v6 binding:
-  # run in a sandbox repo where refs/heads/feature/payment exists)
-  local d pkg
-  d="$(fresh_git_repo feature/payment)" || return 1
-  pkg='{"task_id": "probe-1", "role": "impl", "objective": "o", "acceptance_criteria": ["a"], "feature_id": "payment"}'
-  dv_run_in "$d" "$(agent_event Agent "$(fenced_prompt "$pkg")" true)"
-  expect_pass
-}
-
-case_1_10() {
   # slug-legal feature_id (payment) + matching description -> allow
   local pkg='{"feature_id": "payment", "objective": "o", "acceptance_criteria": ["a"]}'
   dv_run "$(agent_event Agent "$(fenced_prompt "$pkg")" true payment)"
@@ -635,19 +625,25 @@ case_cli_unwritable_cwd() {
 # --- doctor check (3) in scratch repos: direct-on-main flagged, merged clean ---
 
 case_doctor() {
-  # Branch discipline (post-schism rule): a task_id-authored commit made
-  # DIRECTLY on main surfaces as main-violation; the same commit reaching main
-  # through the main agent's --no-ff merge (second parent) must NOT — the scan
-  # is first-parent. doctor always exits 0. Sandboxes are mktemp -d, fully
+  # Branch discipline: a feature_id-authored commit made DIRECTLY on main
+  # surfaces as main-violation; the same commit reaching main through the
+  # main agent's --no-ff merge (second parent) must NOT — the scan is
+  # first-parent. doctor always exits 0. Sandboxes are mktemp -d, fully
   # independent of this repo's history and .orch-lite/ state.
+  #
+  # The author IS the feature_id, so the case uses the CURRENT slug shape
+  # (1.3.0+). The pre-1.3.0 `{role}-{YYYYMMDD}-{seq}` task_id shape is
+  # covered too — the old scan matched ONLY that shape, so a child using a
+  # plain slug (`login-api-fix`) went completely undetected. See the
+  # `case_doctor_slug_author` case below.
   local dir out
 
-  # (a) direct task commit on main -> violation
+  # (a) direct child commit on main -> violation
   dir="$(mktemp -d)" || return 1
   TMP_DIRS+=("$dir")
   git -C "$dir" init -q -b main || return 1
-  git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
-  git -C "$dir" -c user.name=ops-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work committed on main" || return 1
+  git -C "$dir" -c user.name=linyujian -c user.email=linyujian@github.com commit -q --allow-empty -m baseline || return 1
+  git -C "$dir" -c user.name=ops-20260912-99 -c user.email=ops-20260912-99@local commit -q --allow-empty -m "child work committed on main" || return 1
   out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
   grep -q "main-violation: ops-20260912-99" <<< "$out" || { echo "(a) expected main-violation for a direct commit on main"; return 1; }
@@ -656,9 +652,9 @@ case_doctor() {
   dir="$(mktemp -d)" || return 1
   TMP_DIRS+=("$dir")
   git -C "$dir" init -q -b main || return 1
-  git -C "$dir" -c user.name=baseline -c user.email=baseline@local commit -q --allow-empty -m baseline || return 1
+  git -C "$dir" -c user.name=linyujian -c user.email=linyujian@github.com commit -q --allow-empty -m baseline || return 1
   git -C "$dir" checkout -q -b feature/demo || return 1
-  git -C "$dir" -c user.name=impl-20260912-99 -c user.email=child@local commit -q --allow-empty -m "child work on feature branch" || return 1
+  git -C "$dir" -c user.name=impl-20260912-99 -c user.email=impl-20260912-99@local commit -q --allow-empty -m "child work on feature branch" || return 1
   git -C "$dir" checkout -q main || return 1
   git -C "$dir" -c user.name=orchestrator-merge -c user.email=orchestrator@local merge -q --no-ff feature/demo -m "Merge feature/demo into main" || return 1
   out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
@@ -674,11 +670,66 @@ case_doctor() {
   wt_cli "$dir" worktree create --feature-id login-fix >/dev/null || return 1
   printf 'work\n' > "$dir/.worktrees/login-fix/work.txt"
   git -C "$dir/.worktrees/login-fix" add work.txt || return 1
-  git -C "$dir/.worktrees/login-fix" -c user.name=login-fix -c user.email=f@l commit -q -m work || return 1
+  git -C "$dir/.worktrees/login-fix" -c user.name=login-fix -c user.email=login-fix@local commit -q -m work || return 1
   wt_cli "$dir" worktree merge --feature-id login-fix >/dev/null || return 1
   out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
   printf '%s\n' "$out"
   grep -q "stale: login-fix (feature/login-fix is merged into main" <<< "$out" || { echo "(c) expected stale finding for the merged worktree"; return 1; }
+}
+
+case_doctor_slug_author() {
+  # THE regression case: the main-violation scan must catch the CURRENT
+  # feature_id shape. Before the fix the pattern was the pre-1.3.0 task_id
+  # shape (`^[a-z]+-[0-9]{8}-[0-9]+$`), so a child committing straight to
+  # main as `login-api-fix` was NOT detected — the scan was green on a
+  # branch-discipline violation. This is the case the old test missed: it
+  # used the old author shape, so it passed while the real shape failed.
+  local dir out
+
+  # (a) a plain slug feature_id committing directly on main -> detected
+  dir="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$dir")
+  git -C "$dir" init -q -b main || return 1
+  git -C "$dir" -c user.name=linyujian -c user.email=linyujian@github.com commit -q --allow-empty -m baseline || return 1
+  git -C "$dir" -c user.name=login-api-fix -c user.email=login-api-fix@local commit -q --allow-empty -m "child work on main" || return 1
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
+  printf '%s\n' "$out"
+  grep -q "main-violation: login-api-fix" <<< "$out" \
+    || { echo "(a) a slug feature_id committing on main MUST be flagged"; return 1; }
+
+  # (b) a HUMAN's own commit on main -> NOT flagged (no false positive)
+  dir="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$dir")
+  git -C "$dir" init -q -b main || return 1
+  git -C "$dir" -c user.name=linyujian -c user.email=linyujian@github.com commit -q --allow-empty -m baseline || return 1
+  git -C "$dir" -c user.name=linyujian -c user.email=linyujian@github.com commit -q --allow-empty -m "human chore" || return 1
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
+  printf '%s\n' "$out"
+  if grep -q "main-violation" <<< "$out"; then
+    echo "(b) a human's own commit must NOT be flagged as a violation"
+    return 1
+  fi
+  grep -q "doctor: all clear" <<< "$out" || { echo "(b) expected 'doctor: all clear'"; return 1; }
+
+  # (c) a slug feature_id integrated by a --no-ff merge -> NOT flagged
+  dir="$(mktemp -d)" || return 1
+  TMP_DIRS+=("$dir")
+  git -C "$dir" init -q -b main || return 1
+  git -C "$dir" -c user.name=linyujian -c user.email=linyujian@github.com commit -q --allow-empty -m baseline || return 1
+  git -C "$dir" checkout -q -b feature/demo || return 1
+  git -C "$dir" -c user.name=login-api-fix -c user.email=login-api-fix@local commit -q --allow-empty -m "child work on feature branch" || return 1
+  git -C "$dir" checkout -q main || return 1
+  git -C "$dir" -c user.name=linyujian -c user.email=linyujian@github.com merge -q --no-ff feature/demo -m "Merge feature/demo into main" || return 1
+  out="$(cd "$dir" && python3 "$SKILL_DIR/scripts/orch-lite" doctor)" || { echo "doctor exited non-zero"; return 1; }
+  printf '%s\n' "$out"
+  # `||` form on purpose: with `&&`, a NON-matching grep leaves the whole
+  # expression at exit 1, and that becomes the function's return value —
+  # the case would be reported as FAIL even though the assertion passed.
+  if grep -q "main-violation" <<< "$out"; then
+    echo "(c) a merge-integrated slug feature_id must NOT be flagged"
+    return 1
+  fi
+  grep -q "doctor: all clear" <<< "$out" || { echo "(c) expected 'doctor: all clear'"; return 1; }
 }
 
 # --- worktree: create (new / idempotent reuse / busy) + list + remove + merge ---
@@ -1071,6 +1122,7 @@ run_case "audit  session-init missing SKILL.md -> exit 0" case_si_audit_no_skill
 run_case "3.7    session-init unwritable cwd -> fallback, exit 0" case_si_unwritable_cwd
 run_case "3.8    CLI unwritable cwd: doctor human line"   case_cli_unwritable_cwd
 run_case "doctor main-violation: direct flagged, merged clean" case_doctor
+run_case "doctor main-violation: CURRENT slug shape flagged, human not flagged" case_doctor_slug_author
 run_case "PY39  every python file parses as 3.9 (hooks + CLI)"  case_py39_parse
 run_case "DRIFT 1.3.0 deleted mechanisms absent from user-facing artifacts" case_no_deleted_mechanism_refs
 run_case "WT.1   worktree create: new worktree + branch from main" case_wt_create_new

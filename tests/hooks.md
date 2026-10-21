@@ -109,6 +109,35 @@ registration was removed from `~/.zcode/cli/config.json`. Its duties moved:
   worktree list + merged-branch state) and feature_id-authored commits on
   main, always exit 0; `worktree list` flags the same rows.
 
+### `doctor`'s main-violation detection
+
+The scan looks for a **feature_id-authored commit sitting directly on
+main's first-parent chain** — a child that wrote to `main` instead of its
+feature branch. A legitimate `--no-ff` integration merge puts the feature's
+commits on the *second* parent, so they never surface.
+
+Three signals separate a child's commit from a human's, because the slug
+shape alone cannot (a plain name like `linyujian` also matches the
+feature_id slug rule):
+
+1. a **merge commit** (more than one parent) is never a violation;
+2. the **repository owner's own git identity** is never a violation;
+3. a **local email** (`<fid>@local`, `<fid>@orch-lite.local`) marks the
+   child, whose author name matches the email's local part.
+
+| # | Setup | Expected | Actual |
+|---|---|---|---|
+| doctor | a slug feature_id (`login-api-fix`) committing **directly** on main | exit 0, `main-violation: login-api-fix <hash>` | ✅ |
+| doctor | a **human's** own commit on main (`linyujian`) | exit 0, `doctor: all clear` — no false positive | ✅ |
+| doctor | a slug feature_id integrated by a `--no-ff` merge | exit 0, no `main-violation` | ✅ |
+| doctor | the pre-1.3.0 task_id shape (`ops-20260912-99`) on main | exit 0, `main-violation: ops-20260912-99 <hash>` | ✅ |
+
+> Regression note: the scan previously matched only the pre-1.3.0 task_id
+> shape, so a child using a plain slug was reported as `doctor: all clear`
+> — a branch-discipline violation passed the hygiene scan. The test fixture
+> had to change with the key's shape, or it would keep passing while the
+> real shape failed.
+
 No PostToolUse hook is registered anymore; only SessionStart
 (`session-init.py`) and PreToolUse (`dispatch-validate.py`) remain.
 

@@ -771,13 +771,108 @@ def _merged_feature_branches() -> List[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
-# Feature/task ids of the `{role}-{YYYYMMDD}-{seq}` shape; a commit author
-# matching this on main's first-parent chain means a child committed directly
-# to main (branch discipline violation). Commits integrated by the main
-# agent's merge land on second parents and are invisible to the first-parent
-# scan — legitimate integration must never be flagged.
-TASK_AUTHOR_RE = re.compile(r"^[a-z]+-[0-9]{8}-[0-9]+$")
+# A commit author that names a FEATURE on main's first-parent chain means a
+# child committed directly to main (branch discipline violation).
+#
+# The author IS the feature_id (the child sets GIT_AUTHOR_NAME=<feature_id>),
+# so the shape to match is the feature_id slug rule — the same rule the
+# dispatch gate enforces (`^[a-z0-9][a-z0-9._-]*$`). The previous pattern
+# (`^[a-z]+-[0-9]{8}-[0-9]+$`) was the pre-1.3.0 task_id shape and matched
+# NOTHING since feature_id became a slug: a child committing straight to
+# main went undetected. See DEVLOG 2026-10-21.
+FEATURE_AUTHOR_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
+# The main agent's own identities. These authors are NOT feature ids and must
+# never be flagged: a merge authored by the orchestrator is the legitimate
+# integration path.
+MAIN_AGENT_AUTHORS = frozenset({
+    "orchestrator-merge",
+    "orchestrator",
+    "orchestrator-init",
+})
+
+
+def _human_authors() -> set:
+    """Identities that belong to a PERSON, not to a dispatched child.
+
+    A child's commits are authored as `<feature_id>`; a human's commits are
+    authored as the human's own name (`linyujian`, `LYJ132`, ...). Both match
+    the slug shape, so the shape alone cannot tell them apart — the human's
+    own git identity is the reliable discriminator.
+
+    Sources, in order:
+      * the repository's configured `user.name` / `user.email` (the owner);
+      * the committer identities of the recent history (the owner commits
+        with their own name, so their name shows up there);
+      * the known tool identities above.
+
+    Everything else that matches the slug shape is treated as a feature id.
+    """
+    humans = set(MAIN_AGENT_AUTHORS)
+    for key in ("user.name", "user.email"):
+        code, out = _run_git("config", "--get", key)
+        if code == 0 and out.strip():
+            humans.add(out.strip())
+    # The owner of the repository: their name appears as an author on the
+    # commits they made themselves (merges, chores, releases).
+    code, out = _run_git("log", "--first-parent", "-n", "30", "--format=%an%x00%ae", "main")
+    if code == 0:
+        for line in out.splitlines():
+            name, sep, email = line.partition("\x00")
+            if not sep:
+                continue
+            name = name.strip()
+            email = email.strip()
+            # A child's commit: author name == feature id AND the email is a
+            # local one (`<fid>@local`, `<fid>@orch-lite.local`, `child@local`).
+            # The email's local part repeats the feature id -> a child, not a
+            # human.
+            local = email.split("@")[0].strip().lower()
+            if name and local and name.lower() == local:
+                continue
+            if email.lower().endswith("@local") or email.lower().endswith(
+                "@orch-lite.local"
+            ) or email.lower().endswith("@orch.local"):
+                continue
+            if name:
+                humans.add(name)
+    return humans
+
+
+def _main_violations() -> List[tuple]:
+    """feature_id-authored commits sitting DIRECTLY on main's first-parent chain.
+
+    A legitimate integration is a `--no-ff` merge: the feature's own commits
+    land on the SECOND parent and are invisible to a first-parent scan. A
+    child commit that appears on the FIRST parent chain is a branch-discipline
+    violation — the child wrote to main directly.
+
+    Returns (author, short_hash) pairs.
+    """
+    humans = _human_authors()
+    code, out = _run_git(
+        "log", "--first-parent", "-n", "30", "--format=%an%x00%ae%x00%h%x00%P", "main"
+    )
+    if code != 0:
+        return []
+    found = []
+    for line in out.splitlines():
+        parts = line.split("\x00")
+        if len(parts) < 4:
+            continue
+        author, email, short, parents = (p.strip() for p in parts[:4])
+        if not author:
+            continue
+        # A merge commit is the main agent's own integration step, never a
+        # child's write to main.
+        if len(parents.split()) > 1:
+            continue
+        if author.lower() in humans:
+            continue
+        if not FEATURE_AUTHOR_RE.match(author):
+            continue
+        found.append((author, short))
+    return found
 
 def doctor_command(args):
     """Hygiene scan: (0) running version, (1) worktree hygiene via git
@@ -820,18 +915,14 @@ def doctor_command(args):
                 )
 
     # (2) feature_id-authored commits made directly on main -- last ~30 on
-    # main's first-parent chain, only checked while on main. --first-parent
-    # walks the merge commits themselves, not the task-authored commits they
-    # brought in, so a properly integrated feature shows no violation while a
-    # direct commit on main still does.
+    # main's first-parent chain, only checked while on main. A legitimate
+    # `--no-ff` integration merge puts the feature's commits on the second
+    # parent, so they never surface here; a child's own commit on the first
+    # parent chain is a branch-discipline violation.
     bcode, bout = _run_git("branch", "--show-current")
     if bcode == 0 and bout.strip() == "main":
-        lcode, lout = _run_git("log", "--first-parent", "-n", "30", "--format=%an%x00%h")
-        if lcode == 0:
-            for line in lout.splitlines():
-                author, sep, short = line.partition("\x00")
-                if sep and TASK_AUTHOR_RE.match(author.strip()):
-                    findings.append(f"main-violation: {author.strip()} {short.strip()}")
+        for author, short in _main_violations():
+            findings.append(f"main-violation: {author} {short}")
 
     if findings:
         for finding in findings:

@@ -97,6 +97,36 @@
 - The `description == feature_id` gate check and the `orchestration` routing
   state.
 
+### Fixed
+- **`doctor`'s main-violation detection was blind to the current feature_id
+  shape (P0).** The scan matched `^[a-z]+-[0-9]{8}-[0-9]+$` — the pre-1.3.0
+  `{role}-{YYYYMMDD}-{seq}` task_id shape. Since 1.3.0 the feature_id is a
+  slug (`^[a-z0-9][a-z0-9._-]*$`), so the pattern matched NOTHING and a
+  child committing straight to `main` was reported as `doctor: all clear`:
+  a branch-discipline violation passed the hygiene scan. The scan now uses
+  the feature_id slug rule and separates a child's commit from a human's by
+  three signals instead of one: a merge commit (more than one parent) is
+  never a violation; the repository owner's own git identity is never a
+  violation; and the slug shape alone is not enough — a plain name like
+  `linyujian` matches the slug rule too. On this repository the scan now
+  reports the 26 real direct-to-main commits and flags no human commit.
+- **The `doctor` test could not catch the above.** It used the OLD author
+  shape, so it passed while the real shape failed. A new case
+  (`case_doctor_slug_author`) covers the current slug shape, the no-false-
+  positive case (a human's own commit) and the legitimate `--no-ff`
+  integration case.
+- **Dead code in `tests/run.sh`:** `case_1_10` was defined twice — the first
+  definition called an undefined `fresh_git_repo` and carried the deleted
+  `task_id` / `role` fields, and the second silently overwrote it. The
+  dead definition is removed.
+
+### Changed
+- **Dangling references removed.** `N1` / `N11` / `P1–P8` pointed at
+  documents that live outside the repository (`PROGRAMS/docs/lo-meta/`), so
+  a reader of the plugin could not resolve them. The two `N1` mentions now
+  state the rule inline, and `docs/maintenance.md` no longer cites the
+  open-question numbering.
+
 ## 1.3.1 (2026-10-04)
 
 ### Added
