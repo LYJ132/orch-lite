@@ -144,7 +144,7 @@ Within the same session, prefer resuming a returned agent (the dispatch result c
 1. State check: unreturned dispatches this session + `git worktree list` → recover state (also decides `task` vs `resume`)
 2. Output the **orchestration declaration**: the tasks, their branches, and their dependencies (one line, syntax above)
 3. Reuse check: `git log feature/<fid>` — feature exists → reuse its branch (same `feature_id`); resume the same agent when the conversation still has it
-4. **Isolation preparation (write tasks only)**: `repo` (idempotent — ensures a usable repository exists: reuses an existing one, initializes only when the project root is unambiguous, never overwrites `.gitignore`, stops and reports when the root is unclear) → then `worktree create --feature-id <fid>` (idempotent — reuses an existing `.worktrees/<fid>/`). On failure → **stop this dispatch, report the problem, do NOT fall back to the primary tree**. Read-only tasks skip both steps
+4. **Isolation preparation (write tasks only)**: `repo` (idempotent — ensures a usable repository exists: reuses an existing one, initializes only when the project root is unambiguous, never overwrites `.gitignore`, commits the project files as the tracked baseline so work areas can check them out, stops and reports when the root is unclear) → then `worktree create --feature-id <fid>` (idempotent — reuses an existing `.worktrees/<fid>/`). On failure → **stop this dispatch, report the problem, do NOT fall back to the primary tree**. Read-only tasks skip both steps
 5. Dispatch the **fenced-JSON package** via Agent (`description` = a short human-readable task description, `run_in_background: true`; prompt = JSON block + task-specific context only, never re-pasted process text)
 6. End the turn
 
@@ -197,7 +197,7 @@ CLI groups: `worktree` / `repo` / `doctor` — requires **Python >= 3.9** for th
 
 | Command | User | Purpose |
 |---|---|---|
-| `repo` | Main, T1 | ensure a usable repository exists (idempotent): reuse an existing one; initialize only when the project root is unambiguous; never overwrite `.gitignore`; stop and report when the root is unclear |
+| `repo` | Main, T1 | ensure a usable repository exists (idempotent): reuse an existing one; initialize only when the project root is unambiguous; never overwrite `.gitignore`; commit the project files as the tracked baseline (secret safety net: `.env*`, `*.pem`, `*.p12`, `id_rsa*`, `id_ed25519*`); stop and report when the root is unclear |
 | `worktree create --feature-id <fid> [--base main]` | Main, T1 | create (or idempotently reuse) `.worktrees/<fid>/` on `feature/<fid>`; refuses only when the branch is checked out elsewhere (`feature busy`); writes no state |
 | `worktree list` | anyone | worktrees under `.worktrees/` grouped by feature branch, plus feature branches with no active worktree (kept, not deleted) |
 | `worktree remove --feature-id <fid> [--force]` | Main, T2 | remove the worktree (refuses if uncommitted unless `--force`); branch untouched |

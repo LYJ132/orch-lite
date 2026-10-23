@@ -55,9 +55,12 @@
   repository is initialized only when the project root is unambiguous (the
   directory holds files, no parent directory holds a repository, and it is
   not a workspace of existing child repositories); `.gitignore` keeps its
-  content and gains the `.worktrees/` rule only when missing; the user's
-  project files are never staged or committed to manufacture a baseline;
-  an ambiguous project root (an empty directory, a workspace of child
+  content and gains the `.worktrees/` rule plus a secret safety net
+  (`.env*`, `*.pem`, `*.p12`, `id_rsa*`, `id_ed25519*`) only when missing;
+  the user's project files ARE the baseline (staged with `git add -A`), so
+  a work area checks them out and every subsequent edit is trackable — a
+  baseline of `.gitignore` alone left worktrees empty of user code; an
+  ambiguous project root (an empty directory, a workspace of child
   repositories) is reported, not guessed. The executor handbook now
   *verifies* the workspace it was given instead of hand-rolling a
   bootstrap.

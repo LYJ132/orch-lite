@@ -136,21 +136,44 @@ def _init_project_root() -> bool:
 #      parent directory holds a repository, and it is not a workspace of
 #      existing child repositories.
 #   3. NEVER OVERWRITE — .gitignore keeps its content; the .worktrees/ rule
-#      is appended only when missing. The user's project files are never
-#      staged or committed to manufacture a baseline.
+#      and the secret safety net are appended only when missing. The user's
+#      project files ARE the baseline (staged with `git add -A`), so work
+#      areas can check them out.
 #   4. STOP WHEN UNCLEAR — an ambiguous project root is reported, not guessed.
 #
 # The baseline commit is required: `git worktree add <dir> main` needs a
 # valid commit on the base branch, so a repository without any commit cannot
-# host a worktree. The commit is EMPTY and touches only .gitignore.
+# host a worktree.
 
 _GITIGNORE_RULE = ".worktrees/"
+
+# Safety-net secret patterns for the bootstrap baseline commit. Bootstrap now
+# stages all existing files (`git add -A`) so work areas can check them out,
+# and these patterns keep credentials out of that first commit even when the
+# user has no .gitignore of their own. Deliberately conservative:
+#
+# - no `*.key` — test fixtures routinely ship public keys;
+# - no `*.secret` — too broad, would swallow legitimately tracked fixtures;
+# - `.env*` is intentionally over-broad: negate with `!.env.example` after
+#   bootstrap if you track that file.
+#
+# Only applied during bootstrap. Existing repos keep their own .gitignore
+# untouched.
+SECRET_SAFETY_NET = (".env*", "*.pem", "*.p12", "id_rsa*", "id_ed25519*")
 
 
 def _has_commits() -> bool:
     """True when HEAD points at a commit (an unborn branch has none)."""
     code, _ = _run_git("rev-parse", "--verify", "--quiet", "HEAD")
     return code == 0
+
+
+def _tracked_file_count() -> int:
+    """The number of files tracked by HEAD (0 for an empty commit)."""
+    code, out = _run_git("ls-tree", "-r", "--name-only", "HEAD")
+    if code != 0:
+        return 0
+    return len([l for l in out.splitlines() if l.strip()])
 
 
 def _parent_repo_root() -> Optional[Path]:
@@ -185,35 +208,36 @@ def _child_repos(directory: Path) -> List[Path]:
     return found
 
 
-def _gitignore_has_rule(path: Path) -> bool:
-    """True when .gitignore already carries the .worktrees/ rule."""
-    try:
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if line.strip() == _GITIGNORE_RULE:
-                return True
-    except OSError:
-        return False
-    return False
-
-
-def _ensure_gitignore_rule(root: Path) -> str:
-    """Append the .worktrees/ rule to .gitignore, preserving its content.
+def _ensure_gitignore_rules(root: Path, rules) -> str:
+    """Append the given rules to .gitignore, preserving its content.
 
     Returns a one-line description of what happened. The file is never
-    overwritten; the rule is appended only when it is missing.
+    overwritten; a rule is appended only when it is missing.
     """
     gitignore = root / ".gitignore"
-    if gitignore.exists() and _gitignore_has_rule(gitignore):
-        return "gitignore: .worktrees/ rule already present (not appended)"
     try:
         existing = gitignore.read_text(encoding="utf-8", errors="replace") if gitignore.exists() else ""
+    except OSError as exc:
+        return "gitignore: could not read (%s)" % exc
+    present = {line.strip() for line in existing.splitlines()}
+    missing = [r for r in rules if r not in present]
+    if not missing:
+        return "gitignore: all %d rule(s) already present (not appended)" % len(rules)
+    try:
         with gitignore.open("a", encoding="utf-8") as fh:
             if existing and not existing.endswith("\n"):
                 fh.write("\n")
-            fh.write(_GITIGNORE_RULE + "\n")
+            for rule in missing:
+                fh.write(rule + "\n")
     except OSError as exc:
         return "gitignore: could not update (%s)" % exc
-    return "gitignore: .worktrees/ rule appended (existing content preserved)"
+    return "gitignore: %d rule(s) appended, existing content preserved (%s)" % (
+        len(missing), ", ".join(missing))
+
+
+def _ensure_gitignore_rule(root: Path) -> str:
+    """Append the .worktrees/ rule to .gitignore, preserving its content."""
+    return _ensure_gitignore_rules(root, (_GITIGNORE_RULE,))
 
 
 def repo_command(args):
@@ -227,9 +251,10 @@ def repo_command(args):
         unambiguous — the directory holds project files, no parent directory
         holds a repository, and it is not a workspace of existing child
         repositories;
-      * .gitignore keeps its content and gains the .worktrees/ rule only
-        when missing; the user's project files are never staged or
-        committed to manufacture a baseline;
+      * .gitignore keeps its content and gains the .worktrees/ rule and the
+        secret safety net only when missing; the user's project files ARE
+        the baseline (staged with `git add -A`), so a work area checks them
+        out and every subsequent edit is trackable;
       * an ambiguous project root is REPORTED, never guessed.
 
     Idempotent: running it twice reports the second run as "reused".
@@ -289,21 +314,17 @@ def repo_command(args):
         print("Error: the repository was created but its root could not be resolved")
         return 1
 
-    gitignore_note = _ensure_gitignore_rule(root)
+    gitignore_note = _ensure_gitignore_rules(root, (_GITIGNORE_RULE,) + SECRET_SAFETY_NET)
 
-    # The baseline commit is EMPTY and touches only .gitignore: the user's
-    # project files are never staged. `git worktree add <dir> main` needs a
-    # valid commit on the base branch.
-    staged = []
-    try:
-        code, out = _run_git("status", "--porcelain")
-        if code == 0:
-            staged = [l for l in out.splitlines() if l.strip()]
-    except OSError:
-        staged = []
-    add_code, add_out = _run_git("add", ".gitignore")
+    # The baseline commit stages ALL existing files (`git add -A`), so a work
+    # area checks out the user's code — previously only .gitignore was staged,
+    # which left worktrees empty of user code and made subsequent edits
+    # untrackable. The secret safety net written above keeps credentials out
+    # of this first commit. `git worktree add <dir> main` needs a valid commit
+    # on the base branch.
+    add_code, add_out = _run_git("add", "-A")
     if add_code != 0:
-        print("Error: could not stage .gitignore: %s" % add_out)
+        print("Error: could not stage the project files: %s" % add_out)
         return 1
     commit_code, commit_out = _run_git(
         "-c", "user.name=orchestrator-init", "-c", "user.email=orchestrator@local",
@@ -313,12 +334,11 @@ def repo_command(args):
         print("Error: baseline commit failed: %s" % commit_out)
         return 1
 
+    committed = _tracked_file_count()
     print("Repository initialized: %s" % PROJECT_ROOT)
     print("  branch:   main (created)")
     print("  %s" % gitignore_note)
-    print("  baseline: empty commit (your project files were NOT staged)")
-    if staged:
-        print("Note: %d untracked path(s) left untouched, as they should be." % len(staged))
+    print("  baseline: %d file(s) committed (your project files are tracked from the first commit)" % committed)
     print("Note: feature branches are long-lived; never delete the branch when done.")
     return 0
 

@@ -828,26 +828,44 @@ case_wt_merge() {
 case_repo_new_project() {
   # A new project directory (has files, no repository anywhere) -> the repo
   # is initialized, .gitignore keeps its content and gains the .worktrees/
-  # rule, and the user's project files are NOT staged or committed.
+  # rule plus the secret safety net, and the user's project files ARE
+  # committed as the baseline — so a work area checks them out and every
+  # subsequent edit is trackable. Credential-like files (.env*) are kept out
+  # by the safety net even when the user has no .gitignore of their own.
   local d out
   d="$(mktemp -d)" || return 1
   TMP_DIRS+=("$d")
   printf 'app code\n' > "$d/app.py"
+  printf 'SECRET=1\n' > "$d/.env"
   printf 'node_modules\n' > "$d/.gitignore"
   out="$(cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" repo)" \
     || { echo "repo init failed: $out"; return 1; }
   grep -q "Repository initialized: $d" <<< "$out" || { echo "init line missing: $out"; return 1; }
   [ -d "$d/.git" ] || { echo "no repository was created"; return 1; }
-  # .gitignore: the original content survives, the rule is appended
+  # .gitignore: the original content survives, the rules are appended
   grep -qxF "node_modules" "$d/.gitignore" || { echo "the original .gitignore content was lost"; return 1; }
   grep -qxF ".worktrees/" "$d/.gitignore" || { echo "the .worktrees/ rule was not added"; return 1; }
-  # the user's project files were never staged
+  grep -qxF ".env*" "$d/.gitignore" || { echo "the secret safety net was not written"; return 1; }
+  # the user's project file IS tracked (the whole point: work areas can
+  # check it out, and later edits are trackable)
   git -C "$d" ls-files --error-unmatch app.py >/dev/null 2>&1 \
-    && { echo "the user's project file was staged — it must not be"; return 1; }
+    || { echo "the user's project file is NOT tracked — work areas would be empty of it"; return 1; }
   git -C "$d" show --stat --oneline HEAD | grep -q "app.py" \
-    && { echo "the user's project file was committed — it must not be"; return 1; }
+    || { echo "the user's project file is missing from the baseline commit"; return 1; }
+  # the credential file is kept out by the safety net
+  git -C "$d" ls-files --error-unmatch .env >/dev/null 2>&1 \
+    && { echo "the credential file was committed — the safety net failed"; return 1; }
   # a baseline commit exists (git worktree add needs a valid commit)
   git -C "$d" rev-parse --verify --quiet HEAD >/dev/null || { echo "no baseline commit"; return 1; }
+  # the worktree checks out the user's code
+  (cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" worktree create --feature-id probe-1 >/dev/null) \
+    || { echo "worktree create failed"; return 1; }
+  [ -f "$d/.worktrees/probe-1/app.py" ] \
+    || { echo "the worktree is empty of the user's code — the baseline did not include it"; return 1; }
+  [ ! -f "$d/.worktrees/probe-1/.env" ] \
+    || { echo "the credential file leaked into the worktree"; return 1; }
+  (cd "$d" && python3 "$SKILL_DIR/scripts/orch-lite" worktree remove --feature-id probe-1 --force >/dev/null) \
+    || { echo "worktree cleanup failed"; return 1; }
 }
 
 case_repo_idempotent() {
@@ -1134,7 +1152,7 @@ run_case "WT.6   worktree merge: clean merge into main, branch kept" case_wt_mer
 run_case "WT.7   CLI from a repo subdirectory resolves the repo root" case_wt_subdir_root
 run_case "WT.8   CLI outside any repo: explicit error, nothing created" case_wt_outside_repo
 run_case "WT.9   worktree preparation failure: non-zero, primary tree untouched" case_wt_prepare_failure
-run_case "REPO.1 repo: new project -> init, .gitignore preserved, user files NOT staged" case_repo_new_project
+run_case "REPO.1 repo: new project -> init, .gitignore preserved, user files committed as baseline, secrets kept out" case_repo_new_project
 run_case "REPO.2 repo: idempotent, no duplicate .worktrees/ rule" case_repo_idempotent
 run_case "REPO.3 repo: workspace of child repos -> not initialized" case_repo_workspace_guard
 run_case "REPO.4 repo: empty dir (unclear root) -> not initialized" case_repo_empty_dir

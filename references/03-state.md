@@ -44,7 +44,7 @@ already has a commit):
 | Situation | `repo` does |
 |---|---|
 | an existing repository | reuses it (main working tree as the root); never creates a nested repo |
-| a new project directory (has files, no repo above, no child repos) | initializes it, appends the missing `.worktrees/` rule, creates an EMPTY baseline commit (the user's files stay untracked) |
+| a new project directory (has files, no repo above, no child repos) | initializes it, appends the missing `.worktrees/` rule and the secret safety net, creates a baseline commit of ALL existing files (`git add -A`) — the user's code is tracked from the first commit, so a work area checks it out |
 | a directory holding existing child repositories | **refuses** — a workspace is not a project |
 | an empty directory | **refuses** — not unambiguously a project root |
 | a repository without any commit | **reports** — a worktree needs a valid commit on the base branch |
@@ -78,10 +78,19 @@ Worktree isolation prevents concurrent edits from colliding; integration conflic
 ## 3. Git Ignore (what `repo` appends)
 ```gitignore
 .worktrees/
+.env*
+*.pem
+*.p12
+id_rsa*
+id_ed25519*
 ```
-The `repo` command appends the missing line only: it preserves the existing
-`.gitignore` content and adds `.worktrees/` only when that rule is not
-already there. It never overwrites the file, and it never stages or commits
-the user's existing project files to manufacture a baseline. The baseline
-commit it creates is EMPTY (it touches only `.gitignore`), because
-`git worktree add <dir> <base>` needs a valid commit on the base branch.
+The `repo` command appends the missing rules only: it preserves the existing
+`.gitignore` content and adds `.worktrees/` plus the secret safety net only
+when those rules are not already there. It never overwrites the file.
+
+The baseline commit stages ALL existing files (`git add -A`), so a work
+area checks out the user's code and every subsequent edit is trackable —
+a baseline of `.gitignore` alone would leave worktrees empty of user code.
+The secret safety net keeps credentials out of that first commit even when
+the user has no `.gitignore` of their own. `git worktree add <dir> <base>`
+needs a valid commit on the base branch, which the baseline provides.
