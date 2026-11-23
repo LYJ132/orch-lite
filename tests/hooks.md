@@ -34,10 +34,10 @@ written; runtime >=3.19.1 sends only `description` / `prompt` /
 first ```json block (fallback: any fenced block whose content contains
 `feature_id`); with no fenced block the call is **DENIED** — every Agent call
 from the main session is a dispatch and must be re-sent with the fenced
-block. A `run_in_background` explicitly sent as non-`true` is **DENIED** —
-dispatches must be background so the main session returns to the user
-immediately; the flag's ABSENCE is compliant (1.3.3: absent = background on
-runtime >=3.19.1).
+block. The background flag is NOT part of the contract (1.3.4):
+background-ness is a description the main agent is told (SKILL.md invariant
+1), not a rule the hook enforces — the gate never inspects
+`run_in_background`, in any shape (absent / true / false).
 
 Enforces the **target contract** (constants single-sourced in
 `hooks/dispatch-validate.py`; `hooks/session-init.py` renders the SessionStart
@@ -56,18 +56,18 @@ ignored when present.
 
 | # | Input | Expected | Actual |
 |---|---|---|---|
-| 1.1 | valid fenced JSON (all 3 required fields) + `run_in_background: true` + matching `description` | exit 0, empty stdout | ✅ |
+| 1.1 | valid fenced JSON (all 3 required fields; flag ignored, pre-3.19.1 shape carried `run_in_background: true`) + matching `description` | exit 0, empty stdout | ✅ |
 | 1.2 | fenced JSON missing `objective` (+ background) | exit 2, stderr: `...required field(s): objective` | ✅ |
 | 1.3 | fenced JSON + `feature_id: "Bad_Branch!"` (+ background) | exit 2, stderr: `...must match ^[a-z0-9][a-z0-9._-]*$ (it names the feature/<feature_id> branch and the .worktrees/<feature_id> worktree)` | ✅ |
 | 1.4 | prompt without any fenced block | exit 2, stderr: `no ```json fenced block found` | ✅ |
 | 1.5 | fenced block containing malformed JSON (+ background) | exit 2, stderr: `dispatch fenced block is not valid JSON` | ✅ |
 | 1.6 | fenced JSON incl. legacy `instance_id` field (+ background) | exit 0, empty stdout (instance_id retired, ignored) | ✅ |
-| 1.7 | real-shaped Agent `tool_input` (description/prompt/subagent_type/run_in_background), no fenced JSON | exit 2 (no-block reason on stderr) | ✅ |
+| 1.7 | real-shaped Agent `tool_input` (description/prompt/subagent_type; pre-3.19.1 runtimes also carried the background flag), no fenced JSON | exit 2 (no-block reason on stderr) | ✅ |
 | 1.8 | malformed JSON on stdin | fail-open: exit 0, empty stdout, one-line stderr diagnostic | ✅ |
 | 1.9 | `tool_name: Task` alias, valid fenced JSON + background | exit 0, empty stdout | ✅ |
 | 1.10 | slug-legal `feature_id: "payment"` + matching description | exit 0, empty stdout | ✅ |
-| 1.11 | valid fenced JSON, `run_in_background` absent (the >=3.19.1 shape) | exit 0, empty stdout (absent = background; 1.3.3) | ✅ |
-| 1.12 | valid fenced JSON but `run_in_background: false` | exit 2, stderr names `run_in_background` (explicit foreground call) | ✅ |
+| 1.11 | valid fenced JSON, `run_in_background` absent (the >=3.19.1 shape) | exit 0, empty stdout (flag not inspected; 1.3.4) | ✅ |
+| 1.12 | valid fenced JSON but `run_in_background: false` (the legacy foreground shape) | exit 0, empty stdout (flag not inspected; 1.3.4) | ✅ |
 | 1.15 | prompt without the handbook-first instruction (no `skills/orch-lite-executor/SKILL.md` line) | exit 2, stderr names the handbook path | ✅ |
 | 1.25 | fenced JSON without `feature_id` | exit 2, stderr: `...required field(s): feature_id` | ✅ |
 | 1.26 | `description` differs from the package's `feature_id` | exit 0, empty stdout (the description is free-form) | ✅ |
@@ -81,12 +81,12 @@ ignored when present.
 | GIT | executor handbook: the git bootstrap reuses an existing repository first, initializes only when the project root is unambiguous, preserves `.gitignore`, never stages the user's files, and stops when the root is unclear | assertions on the executor handbook | ✅ |
 | GATE | session-init output: the `--- Dispatch gate (hook-enforced) ---` notice | rendered from the gate constants; names NO deleted field (`reuses` / `task_id` / `role`), names every gate constant | ✅ |
 
-Hard enforcement (1.4, 1.7, 1.12) is the design point: the fenced
+Hard enforcement (1.4, 1.7) is the design point: the fenced
 block is the only dispatch marker that actually reaches the hook, and its
-absence blocks the call instead of passing through; an explicitly
-non-`true` background flag is blocked (1.12) so the main session always
-returns to the user immediately — the flag itself is optional since 1.3.3,
-because runtime >=3.19.1 dispatches are background by contract (1.11). When a
+absence blocks the call instead of passing through. The background flag is
+not enforced at all (1.11–1.12: ignored in every shape; 1.3.4 owner
+decision "inform, not restrict" — the platform owns backgroundness, SKILL.md
+describes it). When a
 fenced block + background is present it is a dispatch and must satisfy the
 target contract: 3 required fields (1.1–1.2), a slug-legal `feature_id`
 (1.3, 1.10), the optional-worktree checks (1.28–1.30), and retired
@@ -108,6 +108,15 @@ dispatch could run at all (P0). New rule: absent = compliant; an explicitly
 non-`true` flag still denies. The SessionStart GATE_NOTICE states the rule
 via the new `BACKGROUND_CLAUSE` constant (single-sourced with the enforcer,
 so the notice cannot drift).
+
+v7 behavior (1.3.4, 2026-11-23, owner decision "告知，而非限制"): the flag
+left the contract ENTIRELY — the gate never inspects `run_in_background`
+(every shape passes; the constant, its deny reason and the GATE_NOTICE
+clause are deleted). 1.3.3 had made the flag optional; the owner pushed
+further: background-ness is a DESCRIPTION the agent is told (SKILL.md
+invariant 1), not a restriction the hook enforces — the platform owns
+whether a dispatch is background, and the hook carries no trace of the
+parameter.
 
 ---
 

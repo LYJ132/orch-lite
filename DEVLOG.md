@@ -322,3 +322,22 @@ for dispatch availability everywhere. Accepted: the enforcement point moved
 into the platform contract, which is where the flag actually lives; invariant
 1 still instructs background dispatches, and an explicit non-`true` flag
 remains a hard deny on every platform.
+
+## contract-20261123-background-flag-retired (1.3.4)
+
+**Owner decision (2026-11-23, same day as 1.3.3)**: "插件中不再包含相关的
+参数信息，后台子代理只作为一个描述——告知，而非限制。" The 1.3.3
+optional-flag rule was a half-measure: the hook still parsed and judged the
+flag. The flag has now left the contract ENTIRELY — the constant, the deny
+reason, the evaluate() check, its tool_input plumbing and the GATE_NOTICE
+clause are all deleted; the hook carries no trace of the parameter.
+
+**Rule**: the gate validates the fenced-JSON package only — required fields,
+slug, handbook pointer, worktree shape/existence. Background-ness is
+DESCRIPTIVE: SKILL.md invariant 1 tells the main agent a dispatch runs as a
+background subagent (so the main session stays unblocked); the platform owns
+the actual dispatch mode; the hook inspects nothing for it.
+
+**Judgment call**: on any runtime a foreground dispatch now passes the gate
+— accepted by the owner: enforcing backgroundness belongs to the platform
+contract, not to a prose-era flag the host may or may not send.

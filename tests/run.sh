@@ -250,16 +250,18 @@ case_1_10() {
 }
 
 case_1_11() {
-  # The >=3.19.1 shape: the platform no longer sends `run_in_background`
-  # (subagents are always background), so ABSENT is compliant (1.3.3).
+  # The >=3.19.1 shape (no flag in tool_input): passes — the gate never
+  # inspects the flag (1.3.4).
   dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" absent)"
   expect_pass
 }
 
 case_1_12() {
-  # An EXPLICITLY non-true flag is still the legacy foreground call — deny.
+  # The legacy foreground shape passes too: the gate never inspects the flag
+  # (1.3.4, owner decision "inform, not restrict" — backgroundness is
+  # described in SKILL.md, not enforced here).
   dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" false)"
-  expect_deny "run_in_background"
+  expect_pass
 }
 
 case_1_15() {
@@ -355,7 +357,7 @@ j = ctx.find("\n\n--- ", i)
 notice = ctx[i:j if j != -1 else len(ctx)].strip()
 for banned in ("reuses", "task_id", "role"):
     assert banned not in notice, f"notice names deleted field: {banned}"
-for required in ("feature_id", "objective", "acceptance_criteria", "run_in_background"):
+for required in ("feature_id", "objective", "acceptance_criteria"):
     assert required in notice, f"notice misses gate constant: {required}"
 assert "skills/orch-lite-executor/SKILL.md" in notice, "notice misses the handbook path"
 PY
@@ -1119,8 +1121,8 @@ run_case "1.7    real-shaped no-fence input -> deny"      case_1_7
 run_case "1.8    malformed stdin -> fail-open exit 0"        case_1_8
 run_case "1.9    Task alias + valid package -> allow"     case_1_9
 run_case "1.10   slug-legal feature_id + matching description -> allow" case_1_10
-run_case "1.11   background absent -> allow (>=3.19.1 always background)" case_1_11
-run_case "1.12   run_in_background=false -> deny"         case_1_12
+run_case "1.11   background absent -> allow (flag not inspected)" case_1_11
+run_case "1.12   run_in_background=false -> allow (flag not inspected)" case_1_12
 run_case "1.15   handbook-first missing -> deny"          case_1_15
 run_case "1.25   feature_id missing -> deny (required)"   case_1_25
 run_case "1.26   description != feature_id -> allow (binding removed)" case_1_26

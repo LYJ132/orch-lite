@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.3.4 (2026-11-23)
+
+### Changed
+- **The dispatch gate no longer inspects the background flag at all** (owner
+  decision: inform, not restrict — 告知，而非限制). 1.3.3 had made
+  `run_in_background` optional (absent = compliant); this release removes the
+  flag from the contract entirely: `BACKGROUND_FLAG`, `BACKGROUND_CLAUSE`
+  and `FOREGROUND_REASON` are deleted from `hooks/dispatch-validate.py`, the
+  evaluate() check and its tool_input plumbing are gone, and the SessionStart
+  GATE_NOTICE no longer names the flag. Background-ness stays as a
+  DESCRIPTION the agent is told — SKILL.md invariant 1 states a dispatch
+  runs as a background subagent so the main session stays unblocked — and
+  the platform owns whether a dispatch is background; the hook carries no
+  trace of the parameter.
+- **Test matrix updated**: 1.11 (absent) and 1.12 (explicit `false`) both
+  expect exit 0 now — the gate ignores the flag in every shape; the GATE
+  notice regression pin no longer requires the flag name.
+
 ## 1.3.3 (2026-11-23)
 
 ### Fixed

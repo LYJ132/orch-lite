@@ -116,8 +116,7 @@ try:
         "Dispatch gate: every Agent dispatch is hook-validated — its package "
         "must carry the required fields ("
         + ", ".join(_GATE.REQUIRED_FIELDS)
-        + "), its background flag follows " + _GATE.BACKGROUND_CLAUSE
-        + ", and its first instruction must tell the child to read "
+        + ") and its first instruction must tell the child to read "
         + _GATE.HANDBOOK_PATH
         + "; a write task adds its worktree ("
         + _GATE.WORKTREE_PREFIX + "<feature_id>, the directory must exist), "

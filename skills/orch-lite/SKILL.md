@@ -26,7 +26,7 @@ description: "Lightweight orchestration skill for coding sessions. Routes every 
 ## 5 Invariants (memorize)
 
 <EXTREMELY-IMPORTANT>
-1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package (a background dispatch; pass `run_in_background: true` only on runtimes that still expose the flag). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
+1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package — a dispatch runs as a background subagent, so the main session stays unblocked. Commit incrementally and before reporting, so work is persisted no matter how the session ends.
 2. **Isolation is by construction.** Every dispatched **write** task runs in its own worktree (`.worktrees/<feature_id>/`) — no exceptions, no "solo means the primary tree". A dispatched **read-only** task needs no worktree: it writes nothing, so it may read the project directly. `main` is never a child's write area. One feature = one long-lived branch. The main agent's own bookkeeping (branch creation, integration merges, `scripts/orch-lite worktree ...`) is **not** a dispatched write task and stays in the primary tree. Commit/write-area mechanics: orch-lite-executor skill.
 3. **Children never commit on main.** `main` only receives integration merges, made by the main agent.
 4. **Commit incrementally before reporting.** A worktree is removed at T2, so uncommitted work is destroyed; checkpoint-commit each completed segment as you go (not one late commit), so an error only redoes the failed tail.
@@ -117,7 +117,7 @@ Every dispatch prompt has exactly four parts, in order:
 - **Every dispatch package's first instruction to the child is:** `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the handbook is canonical`.
 </EXTREMELY-IMPORTANT>
 
-The gate checks the package's shape (fenced JSON, required fields, background flag when the platform still sends it, handbook pointer, worktree shape + existence) and nothing else — reuse is a convention the main agent follows when composing. Routing is untouched: the routing states and the 5 invariants above stay exactly as written.
+The gate checks the package's shape (fenced JSON, required fields, handbook pointer, worktree shape + existence) and nothing else — reuse is a convention the main agent follows when composing. Routing is untouched: the routing states and the 5 invariants above stay exactly as written.
 
 ---
 
