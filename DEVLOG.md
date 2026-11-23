@@ -297,3 +297,28 @@ back-ported into this plugin in 1.3.0:
 | Gate contract single-sourcing | dsh: the enforcer owns the constants; the notice renders from them |
 | Lazy isolation (worktree only on observed concurrency) | dsh prose gate; dsh can half-enforce it because its host counts live workers — zcode carries it in prose |
 | Parallelism default (decomposition check: unsure → parallel) | dsh `lib/index.js:96` |
+
+---
+
+## contract-20261123-background-flag-optional (1.3.3)
+
+**Incident**: ZCode runtime 3.19.1 (installed 2026-11-23 00:02) dropped
+`run_in_background` from the Agent tool's `tool_input` — subagents are always
+background there. The gate still demanded the flag be exactly `true`, so
+EVERY dispatch was denied at spawn time (P0; the gate rejected its own
+compliant packages; two worktrees created 2026-11-23 08:26 sat unused on
+branch-off commits because no child could start).
+
+**Rule**: the background flag is optional — absent = compliant (the platform
+contract guarantees background); a flag explicitly sent as non-`true` (the
+legacy foreground call) still denies. The rule is stated once, in
+`dispatch-validate.py` (constants + docstring), and rendered into the
+SessionStart notice via the new `BACKGROUND_CLAUSE`.
+
+**Judgment call**: on pre-3.19.1 runtimes the gate can no longer tell
+"old-platform foreground call" from "new-platform always-background" — both
+arrive as an absent flag — so strict foreground enforcement there is traded
+for dispatch availability everywhere. Accepted: the enforcement point moved
+into the platform contract, which is where the flag actually lives; invariant
+1 still instructs background dispatches, and an explicit non-`true` flag
+remains a hard deny on every platform.

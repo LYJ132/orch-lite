@@ -26,7 +26,7 @@ description: "Lightweight orchestration skill for coding sessions. Routes every 
 ## 5 Invariants (memorize)
 
 <EXTREMELY-IMPORTANT>
-1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package + `run_in_background: true` (non-blocking background). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
+1. **Conversation in-chat, work dispatched.** Pure chat / reading-to-answer → handle directly. Any write/modify → dispatch a child via fenced-JSON package (a background dispatch; pass `run_in_background: true` only on runtimes that still expose the flag). Commit incrementally and before reporting, so work is persisted no matter how the session ends.
 2. **Isolation is by construction.** Every dispatched **write** task runs in its own worktree (`.worktrees/<feature_id>/`) — no exceptions, no "solo means the primary tree". A dispatched **read-only** task needs no worktree: it writes nothing, so it may read the project directly. `main` is never a child's write area. One feature = one long-lived branch. The main agent's own bookkeeping (branch creation, integration merges, `scripts/orch-lite worktree ...`) is **not** a dispatched write task and stays in the primary tree. Commit/write-area mechanics: orch-lite-executor skill.
 3. **Children never commit on main.** `main` only receives integration merges, made by the main agent.
 4. **Commit incrementally before reporting.** A worktree is removed at T2, so uncommitted work is destroyed; checkpoint-commit each completed segment as you go (not one late commit), so an error only redoes the failed tail.
@@ -60,9 +60,9 @@ Only pure conversation / reading files to answer is handled by the main session 
 
 Step 0 (MUST, every request — even a bare greeting): before acting, **you MUST output exactly one `[routing] ...` line as the first line of every reply** (RFC-2119 MUST — this is the audit trail, not a suggestion), choosing among **three** states — intent judged by the model, not by keyword heuristics. **Judge them in this order**:
 
-1. **Is this pure conversation / reading to answer?** → `[routing] chat → handle directly`. Gate every read by its footprint: narrow reads (path known, ~≤3 files, a specific fact) → the main session reads directly; wide sweeps (unknown locations, many files, whole-directory scanning) → dispatch ONE read-only explore child (`run_in_background: true`) that returns conclusions, not file dumps. A read-only explore child writes nothing — no worktree, branch, or commit — so this is dispatch mechanics, not a new state: the routing states stay as written, and the gate only decides when reading escalates from chat to a read-only dispatch.
+1. **Is this pure conversation / reading to answer?** → `[routing] chat → handle directly`. Gate every read by its footprint: narrow reads (path known, ~≤3 files, a specific fact) → the main session reads directly; wide sweeps (unknown locations, many files, whole-directory scanning) → dispatch ONE read-only explore child (background) that returns conclusions, not file dumps. A read-only explore child writes nothing — no worktree, branch, or commit — so this is dispatch mechanics, not a new state: the routing states stay as written, and the gate only decides when reading escalates from chat to a read-only dispatch.
 2. **Is there a recent child agent that should continue this exact work?** → `[routing] resume <fid> (agent_<id>)`. A follow-up order for a feature whose child agent has already returned: wake the owning agent instead of dispatching fresh. Distinct from `task` (a first dispatch). Resume rule: `SendMessage(to: agent_<id>)` with the four-line SUPERSEDES order (Continuation & Resume) — the agent wakes with its context intact; every dispatch result names the id ("Use SendMessage with to: ... to continue this agent"). Hand off fresh (same `feature_id`, surviving conclusions into `STILL VALID`) only when the agent is worn (3+ orders), stuck, failed, or the id is no longer recoverable. Never chain unrelated features onto one agent. After a dispatch returns, carry the handle in the next routing line — `[routing] resume <fid> (agent_<id>)` is short and salient so compaction summaries keep it; a lost id self-heals via fresh-agent hand-off.
-3. **Otherwise: does the work need a delegated executor?** → `[routing] task → dispatch (run_in_background=true)`. Any write/modify MUST be delegated (invariant 1). The main agent must NOT wait: `run_in_background: true` keeps the user unblocked (principle 1).
+3. **Otherwise: does the work need a delegated executor?** → `[routing] task → dispatch (background)`. Any write/modify MUST be delegated (invariant 1). The main agent must NOT wait: dispatches are background calls, so the user stays unblocked (principle 1).
 
 **Immediately after a `task` routing line, output the orchestration declaration** (see the next subsection) — the plan you will execute. A `task` line without a following declaration is an incomplete plan.
 
@@ -117,7 +117,7 @@ Every dispatch prompt has exactly four parts, in order:
 - **Every dispatch package's first instruction to the child is:** `First action: read skills/orch-lite-executor/SKILL.md (your handbook) — the handbook is canonical`.
 </EXTREMELY-IMPORTANT>
 
-The gate checks the package's shape (fenced JSON, required fields, background flag, handbook pointer, worktree shape + existence) and nothing else — reuse is a convention the main agent follows when composing. Routing is untouched: the routing states and the 5 invariants above stay exactly as written.
+The gate checks the package's shape (fenced JSON, required fields, background flag when the platform still sends it, handbook pointer, worktree shape + existence) and nothing else — reuse is a convention the main agent follows when composing. Routing is untouched: the routing states and the 5 invariants above stay exactly as written.
 
 ---
 
@@ -145,7 +145,7 @@ Within the same session, prefer resuming a returned agent (the dispatch result c
 2. Output the **orchestration declaration**: the tasks, their branches, and their dependencies (one line, syntax above)
 3. Reuse check: `git log feature/<fid>` — feature exists → reuse its branch (same `feature_id`); resume the same agent when the conversation still has it
 4. **Isolation preparation (write tasks only)**: `repo` (idempotent — ensures a usable repository exists: reuses an existing one, initializes only when the project root is unambiguous, never overwrites `.gitignore`, commits the project files as the tracked baseline so work areas can check them out, stops and reports when the root is unclear) → then `worktree create --feature-id <fid>` (idempotent — reuses an existing `.worktrees/<fid>/`). On failure → **stop this dispatch, report the problem, do NOT fall back to the primary tree**. Read-only tasks skip both steps
-5. Dispatch the **fenced-JSON package** via Agent (`description` = a short human-readable task description, `run_in_background: true`; prompt = JSON block + task-specific context only, never re-pasted process text)
+5. Dispatch the **fenced-JSON package** via Agent (`description` = a short human-readable task description, background dispatch; prompt = JSON block + task-specific context only, never re-pasted process text)
 6. End the turn
 
 ### DONE <fid> (a child reports success)

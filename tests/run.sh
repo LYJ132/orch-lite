@@ -214,7 +214,8 @@ case_1_6() {
 }
 
 case_1_7() {
-  # Real-shaped Agent tool_input (description/prompt/subagent_type/run_in_background),
+  # Real-shaped Agent tool_input (description/prompt/subagent_type;
+  # pre-3.19.1 runtimes also carried run_in_background),
   # no fenced JSON → deny, never crash.
   local ev
   ev="$(agent_event Agent 'Dispatch the login fix.
@@ -249,11 +250,14 @@ case_1_10() {
 }
 
 case_1_11() {
+  # The >=3.19.1 shape: the platform no longer sends `run_in_background`
+  # (subagents are always background), so ABSENT is compliant (1.3.3).
   dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" absent)"
-  expect_deny "run_in_background"
+  expect_pass
 }
 
 case_1_12() {
+  # An EXPLICITLY non-true flag is still the legacy foreground call — deny.
   dv_run "$(agent_event Agent "$(fenced_prompt "$PKG_OK")" false)"
   expect_deny "run_in_background"
 }
@@ -1115,7 +1119,7 @@ run_case "1.7    real-shaped no-fence input -> deny"      case_1_7
 run_case "1.8    malformed stdin -> fail-open exit 0"        case_1_8
 run_case "1.9    Task alias + valid package -> allow"     case_1_9
 run_case "1.10   slug-legal feature_id + matching description -> allow" case_1_10
-run_case "1.11   background absent -> deny"               case_1_11
+run_case "1.11   background absent -> allow (>=3.19.1 always background)" case_1_11
 run_case "1.12   run_in_background=false -> deny"         case_1_12
 run_case "1.15   handbook-first missing -> deny"          case_1_15
 run_case "1.25   feature_id missing -> deny (required)"   case_1_25
