@@ -26,15 +26,18 @@ v4 prints NOTHING on stdout: **pass = exit 0 with empty stdout; deny = exit
 internal error = fail-open (exit 0, one-line stderr diagnostic)**.
 
 v4 validates the **fenced-JSON dispatch package inside the prompt text** with
-HARD ENFORCEMENT (logic identical to v3): the platform's Agent `tool_input`
-only carries `description` / `prompt` / `subagent_type` /
-`run_in_background`, so the dispatch package lives in the prompt as a ```json
-fenced block. The hook takes the first ```json block (fallback: any fenced
-block whose content contains `task_id`); with no fenced block the call is
-**DENIED** — every Agent call from the main session is a dispatch and must be
-re-sent with the fenced block. Calls whose `run_in_background` is not exactly
-`true` are also **DENIED** — dispatches must be background so the main
-session returns to the user immediately.
+HARD ENFORCEMENT (logic identical to v3): the dispatch package lives in the
+prompt as a ```json fenced block (the Agent `tool_input` carried
+`description` / `prompt` / `subagent_type` / `run_in_background` when v4 was
+written; runtime >=3.19.1 sends only `description` / `prompt` /
+`subagent_type` — subagents are always background there). The hook takes the
+first ```json block (fallback: any fenced block whose content contains
+`feature_id`); with no fenced block the call is **DENIED** — every Agent call
+from the main session is a dispatch and must be re-sent with the fenced
+block. A `run_in_background` explicitly sent as non-`true` is **DENIED** —
+dispatches must be background so the main session returns to the user
+immediately; the flag's ABSENCE is compliant (1.3.3: absent = background on
+runtime >=3.19.1).
 
 Enforces the **target contract** (constants single-sourced in
 `hooks/dispatch-validate.py`; `hooks/session-init.py` renders the SessionStart
@@ -63,8 +66,8 @@ ignored when present.
 | 1.8 | malformed JSON on stdin | fail-open: exit 0, empty stdout, one-line stderr diagnostic | ✅ |
 | 1.9 | `tool_name: Task` alias, valid fenced JSON + background | exit 0, empty stdout | ✅ |
 | 1.10 | slug-legal `feature_id: "payment"` + matching description | exit 0, empty stdout | ✅ |
-| 1.11 | valid fenced JSON but `run_in_background` absent | exit 2, stderr: `run_in_background must be exactly true` | ✅ |
-| 1.12 | valid fenced JSON but `run_in_background: false` | exit 2 (foreground reason on stderr, as 1.11) | ✅ |
+| 1.11 | valid fenced JSON, `run_in_background` absent (the >=3.19.1 shape) | exit 0, empty stdout (absent = background; 1.3.3) | ✅ |
+| 1.12 | valid fenced JSON but `run_in_background: false` | exit 2, stderr names `run_in_background` (explicit foreground call) | ✅ |
 | 1.15 | prompt without the handbook-first instruction (no `skills/orch-lite-executor/SKILL.md` line) | exit 2, stderr names the handbook path | ✅ |
 | 1.25 | fenced JSON without `feature_id` | exit 2, stderr: `...required field(s): feature_id` | ✅ |
 | 1.26 | `description` differs from the package's `feature_id` | exit 0, empty stdout (the description is free-form) | ✅ |
@@ -78,10 +81,12 @@ ignored when present.
 | GIT | executor handbook: the git bootstrap reuses an existing repository first, initializes only when the project root is unambiguous, preserves `.gitignore`, never stages the user's files, and stops when the root is unclear | assertions on the executor handbook | ✅ |
 | GATE | session-init output: the `--- Dispatch gate (hook-enforced) ---` notice | rendered from the gate constants; names NO deleted field (`reuses` / `task_id` / `role`), names every gate constant | ✅ |
 
-Hard enforcement (1.4, 1.7, 1.11–1.12) is the design point: the fenced
+Hard enforcement (1.4, 1.7, 1.12) is the design point: the fenced
 block is the only dispatch marker that actually reaches the hook, and its
-absence blocks the call instead of passing through; foreground calls are
-blocked so the main session always returns to the user immediately. When a
+absence blocks the call instead of passing through; an explicitly
+non-`true` background flag is blocked (1.12) so the main session always
+returns to the user immediately — the flag itself is optional since 1.3.3,
+because runtime >=3.19.1 dispatches are background by contract (1.11). When a
 fenced block + background is present it is a dispatch and must satisfy the
 target contract: 3 required fields (1.1–1.2), a slug-legal `feature_id`
 (1.3, 1.10), the optional-worktree checks (1.28–1.30), and retired
@@ -94,6 +99,15 @@ fenced-JSON package only — the MUST template is a prompt-shape requirement
 owned by SKILL.md's "Dispatch Package (MUST template)" section, not a hook
 validation rule (the handbook pointer is the one prompt-shape check the gate
 duplicates).
+
+v6 behavior (1.3.3, 2026-11-23): the background flag became OPTIONAL. ZCode
+runtime 3.19.1 dropped `run_in_background` from the Agent `tool_input`
+(subagents are always background), so the old exactly-`true` requirement
+denied EVERY dispatch — the gate rejected its own compliant packages, and no
+dispatch could run at all (P0). New rule: absent = compliant; an explicitly
+non-`true` flag still denies. The SessionStart GATE_NOTICE states the rule
+via the new `BACKGROUND_CLAUSE` constant (single-sourced with the enforcer,
+so the notice cannot drift).
 
 ---
 

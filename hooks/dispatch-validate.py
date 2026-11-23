@@ -3,7 +3,9 @@
 
 Target contract: the gate checks the package's SHAPE — a fenced-JSON block
 present and valid, the required fields (feature_id / objective /
-acceptance_criteria), the background flag, the handbook-pointer line, and the
+acceptance_criteria), the background flag (absent = compliant: the platform
+always dispatches in background since runtime 3.19.1; an explicitly sent
+non-true value still denies), the handbook-pointer line, and the
 optional `worktree` checks (shape + directory existence). There is no
 `role` (the dispatch tool IS the role) and no `reuses` (reuse is
 `git log feature/<fid>`). The feature_id slug rule keeps it a safe
@@ -51,8 +53,19 @@ from typing import Optional, Tuple
 # dispatch tool (Agent vs Explore) is the role; reuse is `git log feature/<fid>`.
 REQUIRED_FIELDS = ("feature_id", "objective", "acceptance_criteria")
 
-# The background flag: dispatches are background calls, exactly true.
+# The background flag: dispatches are background calls. Platform contract
+# moved under this gate (ZCode runtime 3.19.1, 2026-11-23): the Agent tool
+# no longer carries `run_in_background` in its tool_input (subagents are
+# ALWAYS background), so an ABSENT flag is compliant — only a flag
+# explicitly sent as non-true (the legacy foreground call) denies.
 BACKGROUND_FLAG = "run_in_background"
+
+# SessionStart notice clause for the flag — single-sourced here so the
+# injected GATE_NOTICE cannot drift from the enforcer.
+BACKGROUND_CLAUSE = (
+    BACKGROUND_FLAG + " absent = background (runtime >=3.19.1 sends no "
+    "flag); when present it must be exactly true"
+)
 
 # Handbook path: the prompt's first instruction must point the child here.
 HANDBOOK_PATH = "skills/orch-lite-executor/SKILL.md"
@@ -77,9 +90,10 @@ NO_BLOCK_REASON = (
 )
 
 FOREGROUND_REASON = (
-    "Dispatch rejected: " + BACKGROUND_FLAG + " must be exactly true "
-    "(dispatches are background calls) — see the Dispatch Package template "
-    "in the orch-lite SKILL.md"
+    "Dispatch rejected: an explicit " + BACKGROUND_FLAG + " must be exactly "
+    "true (dispatches are background calls; runtime >=3.19.1 omits the flag "
+    "and is always background) — see the Dispatch Package template in the "
+    "orch-lite SKILL.md"
 )
 
 INVALID_JSON_REASON = "dispatch fenced block is not valid JSON"
@@ -174,7 +188,11 @@ def evaluate(prompt, run_in_background, cwd=None):
     if block is None:
         return False, NO_BLOCK_REASON
 
-    if run_in_background is not True:
+    # Absent = background (the >=3.19.1 platform contract: subagents are
+    # always background and the flag no longer travels in tool_input); a flag
+    # explicitly sent as non-true (false / 1 / "true") is still the legacy
+    # foreground call — deny.
+    if run_in_background is not None and run_in_background is not True:
         return False, FOREGROUND_REASON
 
     try:

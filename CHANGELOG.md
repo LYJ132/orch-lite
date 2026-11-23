@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.3.3 (2026-11-23)
+
+### Fixed
+- **P0: the dispatch gate rejected every dispatch on ZCode runtime 3.19.1.**
+  The runtime dropped `run_in_background` from the Agent tool's `tool_input`
+  (subagents are always background there), while the gate still required the
+  flag to be exactly `true` — every Agent/Task call was denied before it
+  spawned ("run_in_background must be exactly true"), and no dispatch could
+  run at all. The flag is now OPTIONAL: absent = compliant (the platform
+  contract guarantees background); a flag explicitly sent as non-`true` (the
+  legacy foreground call) still denies. `FOREGROUND_REASON` and the module
+  docstring state the new rule; the SessionStart GATE_NOTICE states it via
+  the new `BACKGROUND_CLAUSE` constant, single-sourced in
+  `hooks/dispatch-validate.py` so the notice cannot drift from the enforcer.
+
+### Changed
+- **SKILL.md wording no longer instructs the model to pass
+  `run_in_background: true`.** Invariant 1, the routing states that mention
+  the flag and NEW_TASK step 5 now describe dispatches as background calls
+  and mention the flag only for runtimes that still expose it. The dispatch
+  matrix (tests/hooks.md 1.11) flipped accordingly: background absent →
+  allow; `run_in_background: false` → deny (unchanged).
+
 ## 1.3.2 (2026-10-20)
 
 ### Changed
